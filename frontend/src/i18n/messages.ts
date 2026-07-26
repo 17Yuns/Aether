@@ -1410,6 +1410,8 @@ const legacyExactEnglishMessages: Record<string, string> = {
   '计费类型': 'Billing type',
   '最大重试次数': 'Max retries',
   '默认 2': 'Default 2',
+  '最大转移次数': 'Max transfers',
+  '最大转移超时': 'Max transfer timeout',
   '流式首字节超时': 'Streaming first-byte timeout',
   '非流式请求超时': 'Non-streaming request timeout',
   '(秒)': '(seconds)',
