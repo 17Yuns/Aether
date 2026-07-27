@@ -363,7 +363,7 @@ const GEMINI_CLI_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderT
 
 const VERTEX_AI_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
     provider_type: "vertex_ai",
-    version: 1,
+    version: 2,
     base_url: "https://aiplatform.googleapis.com",
     endpoints: &[
         FixedProviderEndpointTemplate {
@@ -375,12 +375,6 @@ const VERTEX_AI_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTe
         FixedProviderEndpointTemplate {
             item_key: "gemini:embedding",
             api_format: "gemini:embedding",
-            custom_path: None,
-            config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
-        },
-        FixedProviderEndpointTemplate {
-            item_key: "claude:messages",
-            api_format: "claude:messages",
             custom_path: None,
             config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
         },
@@ -936,26 +930,27 @@ mod tests {
     }
 
     #[test]
-    fn vertex_fixed_provider_template_includes_gemini_embedding_endpoint() {
+    fn vertex_fixed_provider_template_exposes_only_implemented_gemini_endpoints() {
         let template =
             fixed_provider_template("vertex_ai").expect("vertex_ai template should exist");
 
+        assert_eq!(template.version, 2);
         assert_eq!(
             template
                 .endpoints
                 .iter()
                 .map(|item| item.api_format)
                 .collect::<Vec<_>>(),
-            vec![
-                "gemini:generate_content",
-                "gemini:embedding",
-                "claude:messages",
-            ]
+            vec!["gemini:generate_content", "gemini:embedding"]
         );
 
         assert!(
             fixed_provider_endpoint_template_by_api_format("vertex_ai", "gemini:embedding")
                 .is_some()
+        );
+        assert!(
+            fixed_provider_endpoint_template_by_api_format("vertex_ai", "claude:messages")
+                .is_none()
         );
     }
 }
