@@ -540,13 +540,13 @@ pub fn provider_type_admin_oauth_template(provider_type: &str) -> Option<Provide
     match provider_type.trim().to_ascii_lowercase().as_str() {
         "claude_code" => Some(ProviderOAuthTemplate {
             provider_type: "claude_code",
-            display_name: "ClaudeCode",
-            authorize_url: "https://claude.ai/oauth/authorize",
-            token_url: "https://console.anthropic.com/v1/oauth/token",
-            client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+            display_name: "Claude Code",
+            authorize_url: aether_oauth::provider::providers::CLAUDE_CODE_AUTHORIZE_URL,
+            token_url: aether_oauth::provider::providers::CLAUDE_CODE_TOKEN_URL,
+            client_id: aether_oauth::provider::providers::CLAUDE_CODE_CLIENT_ID,
             client_secret: "",
-            scopes: &["org:create_api_key", "user:profile", "user:inference"],
-            redirect_uri: "http://localhost:54545/callback",
+            scopes: aether_oauth::provider::providers::CLAUDE_CODE_OAUTH_SCOPES,
+            redirect_uri: aether_oauth::provider::providers::CLAUDE_CODE_REDIRECT_URI,
             use_pkce: true,
         }),
         "codex" => Some(ProviderOAuthTemplate {
