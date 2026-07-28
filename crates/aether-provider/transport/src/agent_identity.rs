@@ -695,6 +695,7 @@ async fn create_codex_agent_identity_from_session_token_with_auth_api_base_url(
             })),
             body_bytes: None,
             network,
+            transport_profile: None,
         })
         .await
         .map_err(|_| CodexAgentIdentityEnrollmentError::TaskRegistrationRequestFailed)?;
@@ -772,6 +773,7 @@ async fn register_codex_agent_identity_from_access_token_with_auth_api_base_url(
             })),
             body_bytes: None,
             network,
+            transport_profile: None,
         })
         .await
         .map_err(|_| CodexAgentIdentityEnrollmentError::RegistrationRequestFailed)?;
