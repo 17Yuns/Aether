@@ -39,6 +39,7 @@ const AUTHORIZATION_HEADER: &str = "authorization";
 const ASSERTION_PREFIX: &str = "AgentAssertion ";
 const CODEX_AGENT_IDENTITY_AGENT_HARNESS_ID: &str = "codex-cli";
 const CODEX_AGENT_IDENTITY_RUNNING_LOCATION: &str = "local";
+const CODEX_AGENT_IDENTITY_RESPONSES_API_CAPABILITY: &str = "responsesapi";
 
 /// The AgentAssertion scheme is generated internally after an Agent Identity
 /// task has been registered.  Keep the scheme check separate from envelope
@@ -740,6 +741,8 @@ async fn register_codex_agent_identity_from_access_token_with_auth_api_base_url(
                     "running_location": CODEX_AGENT_IDENTITY_RUNNING_LOCATION,
                 },
                 "agent_public_key": agent_public_key,
+                "capabilities": [CODEX_AGENT_IDENTITY_RESPONSES_API_CAPABILITY],
+                "ttl": null,
             })),
             body_bytes: None,
             network,
@@ -1413,6 +1416,20 @@ mod tests {
                 .and_then(|body| body.get("abom"))
                 .and_then(|abom| abom.get("agent_harness_id")),
             Some(&json!("codex-cli"))
+        );
+        assert_eq!(
+            requests[0]
+                .json_body
+                .as_ref()
+                .and_then(|body| body.get("capabilities")),
+            Some(&json!(["responsesapi"]))
+        );
+        assert_eq!(
+            requests[0]
+                .json_body
+                .as_ref()
+                .and_then(|body| body.get("ttl")),
+            Some(&json!(null))
         );
         assert!(requests[0]
             .json_body
