@@ -560,6 +560,10 @@ impl StoredRequestUsageAudit {
         self.request_metadata_number("rate_multiplier")
     }
 
+    pub fn settlement_provider_actual_total_cost(&self) -> Option<f64> {
+        self.request_metadata_number("provider_actual_total_cost")
+    }
+
     pub fn settlement_is_free_tier(&self) -> Option<bool> {
         self.request_metadata_bool("is_free_tier")
     }

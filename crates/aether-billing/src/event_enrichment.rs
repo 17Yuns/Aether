@@ -1,3 +1,4 @@
+use aether_data_contracts::repository::auth::normalize_api_key_billing_multiplier;
 use aether_data_contracts::repository::billing::StoredBillingModelContext;
 use aether_data_contracts::repository::usage::{
     extract_provider_cache_ttl_minutes_from_metadata, resolve_provider_cache_ttl_minutes,
@@ -9,11 +10,11 @@ use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    BillingComputation, BillingModelPricingSnapshot, BillingService, BillingSnapshotStatus,
-    BillingUsageInput,
+    quantize_cost, BillingComputation, BillingModelPricingSnapshot, BillingService,
+    BillingSnapshotStatus, BillingUsageInput,
 };
 
-const SETTLEMENT_SNAPSHOT_SCHEMA_VERSION: &str = "3.0";
+const SETTLEMENT_SNAPSHOT_SCHEMA_VERSION: &str = "3.1";
 
 #[async_trait]
 pub trait BillingModelContextLookup: Send + Sync {
@@ -301,9 +302,34 @@ fn apply_billing_computation(
     pricing: &BillingModelPricingSnapshot,
     computation: BillingComputation,
 ) -> Result<(), DataLayerError> {
-    event.data.total_cost_usd = Some(computation.cost_result.cost);
-    event.data.actual_total_cost_usd = Some(computation.actual_total_cost);
-    merge_billing_snapshot_metadata(&mut event.data.request_metadata, pricing, &computation)
+    let api_key_billing_multiplier =
+        normalize_api_key_billing_multiplier(event.data.api_key_billing_multiplier)?;
+    let base_total_cost = computation.cost_result.cost;
+    let combined_rate_multiplier = computation.rate_multiplier * api_key_billing_multiplier;
+    let billed_actual_total_cost = if computation.is_free_tier {
+        0.0
+    } else {
+        quantize_cost(base_total_cost * combined_rate_multiplier)
+    };
+    if !combined_rate_multiplier.is_finite()
+        || combined_rate_multiplier < 0.0
+        || !billed_actual_total_cost.is_finite()
+        || billed_actual_total_cost < 0.0
+    {
+        return Err(DataLayerError::UnexpectedValue(
+            "api key billing multiplier produced an invalid billed cost".to_string(),
+        ));
+    }
+    event.data.total_cost_usd = Some(base_total_cost);
+    event.data.actual_total_cost_usd = Some(billed_actual_total_cost);
+    merge_billing_snapshot_metadata(
+        &mut event.data.request_metadata,
+        pricing,
+        &computation,
+        base_total_cost,
+        billed_actual_total_cost,
+        api_key_billing_multiplier,
+    )
 }
 
 fn map_pricing_context(context: StoredBillingModelContext) -> BillingModelPricingSnapshot {
@@ -314,12 +340,21 @@ fn merge_billing_snapshot_metadata(
     request_metadata: &mut Option<Value>,
     pricing: &BillingModelPricingSnapshot,
     computation: &BillingComputation,
+    base_total_cost: f64,
+    billed_actual_total_cost: f64,
+    api_key_billing_multiplier: f64,
 ) -> Result<(), DataLayerError> {
     let snapshot = &computation.cost_result.snapshot;
     let billing_snapshot = serde_json::to_value(snapshot).map_err(|err| {
         DataLayerError::UnexpectedValue(format!("failed to serialize billing snapshot: {err}"))
     })?;
-    let settlement_snapshot = build_settlement_snapshot(pricing, computation);
+    let settlement_snapshot = build_settlement_snapshot(
+        pricing,
+        computation,
+        base_total_cost,
+        billed_actual_total_cost,
+        api_key_billing_multiplier,
+    );
 
     let mut metadata = match request_metadata.take() {
         Some(Value::Object(object)) => object,
@@ -337,7 +372,28 @@ fn merge_billing_snapshot_metadata(
     );
     metadata.insert(
         "rate_multiplier".to_string(),
+        Value::from(computation.rate_multiplier * api_key_billing_multiplier),
+    );
+    metadata.insert(
+        "provider_rate_multiplier".to_string(),
         Value::from(computation.rate_multiplier),
+    );
+    metadata.insert(
+        "api_key_billing_multiplier".to_string(),
+        Value::from(api_key_billing_multiplier),
+    );
+    metadata.insert(
+        "combined_rate_multiplier".to_string(),
+        Value::from(computation.rate_multiplier * api_key_billing_multiplier),
+    );
+    metadata.insert("base_total_cost".to_string(), Value::from(base_total_cost));
+    metadata.insert(
+        "provider_actual_total_cost".to_string(),
+        Value::from(computation.actual_total_cost),
+    );
+    metadata.insert(
+        "billed_actual_total_cost".to_string(),
+        Value::from(billed_actual_total_cost),
     );
     metadata.insert(
         "is_free_tier".to_string(),
@@ -350,6 +406,9 @@ fn merge_billing_snapshot_metadata(
 fn build_settlement_snapshot(
     pricing: &BillingModelPricingSnapshot,
     computation: &BillingComputation,
+    base_total_cost: f64,
+    billed_actual_total_cost: f64,
+    api_key_billing_multiplier: f64,
 ) -> Value {
     let snapshot = &computation.cost_result.snapshot;
     let resolution = &computation.pricing_resolution;
@@ -372,7 +431,10 @@ fn build_settlement_snapshot(
             "price_per_request_source": resolution.price_per_request_source.map(|source| source.as_str()),
             "tiered_pricing": resolution.tiered_pricing,
             "price_per_request": resolution.price_per_request,
-            "rate_multiplier": computation.rate_multiplier,
+            "rate_multiplier": computation.rate_multiplier * api_key_billing_multiplier,
+            "provider_rate_multiplier": computation.rate_multiplier,
+            "api_key_billing_multiplier": api_key_billing_multiplier,
+            "combined_rate_multiplier": computation.rate_multiplier * api_key_billing_multiplier,
             "is_free_tier": computation.is_free_tier,
         },
         "billing_plan_snapshot": {
@@ -385,8 +447,10 @@ fn build_settlement_snapshot(
         "resolved_dimensions": snapshot.resolved_dimensions.clone(),
         "resolved_variables": snapshot.resolved_variables.clone(),
         "cost_breakdown": snapshot.cost_breakdown.clone(),
-        "total_cost": snapshot.total_cost,
-        "actual_total_cost": computation.actual_total_cost,
+        "base_total_cost": base_total_cost,
+        "total_cost": base_total_cost,
+        "provider_actual_total_cost": computation.actual_total_cost,
+        "actual_total_cost": billed_actual_total_cost,
         "status": snapshot.status,
         "calculated_at": snapshot.calculated_at.clone(),
     })
@@ -431,6 +495,51 @@ mod tests {
         {
             Ok(self.name_context.clone())
         }
+    }
+
+    fn fixed_request_price_lookup(provider_billing_type: &str) -> TestLookup {
+        TestLookup {
+            name_context: Some(
+                StoredBillingModelContext::new(
+                    "provider-1".to_string(),
+                    Some(provider_billing_type.to_string()),
+                    Some("key-1".to_string()),
+                    Some(json!({"openai:chat": 1.25})),
+                    None,
+                    "global-model-1".to_string(),
+                    "gpt-5".to_string(),
+                    None,
+                    Some(0.2),
+                    None,
+                    Some("model-1".to_string()),
+                    Some("gpt-5-upstream".to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("billing context should build"),
+            ),
+            model_id_context: None,
+        }
+    }
+
+    fn fixed_request_price_event(multiplier: Option<f64>) -> UsageEvent {
+        UsageEvent::new(
+            UsageEventType::Completed,
+            "req-billing-multiplier",
+            UsageEventData {
+                provider_name: "OpenAI".to_string(),
+                model: "gpt-5".to_string(),
+                provider_id: Some("provider-1".to_string()),
+                provider_api_key_id: Some("key-1".to_string()),
+                request_type: Some("chat".to_string()),
+                api_format: Some("openai:chat".to_string()),
+                endpoint_api_format: Some("openai:chat".to_string()),
+                api_key_billing_multiplier: multiplier,
+                status_code: Some(200),
+                ..UsageEventData::default()
+            },
+        )
     }
 
     #[test]
@@ -700,6 +809,86 @@ mod tests {
                 .and_then(Value::as_str),
             Some("complete")
         );
+    }
+
+    #[tokio::test]
+    async fn api_key_multiplier_preserves_nominal_cost_and_scales_settlement() {
+        let lookup = fixed_request_price_lookup("pay_as_you_go");
+        let mut event = fixed_request_price_event(Some(2.0));
+
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .expect("billing should succeed");
+
+        assert_eq!(event.data.total_cost_usd, Some(0.2));
+        assert_eq!(event.data.actual_total_cost_usd, Some(0.5));
+        let metadata = event.data.request_metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.get("base_total_cost"), Some(&json!(0.2)));
+        assert_eq!(metadata.get("rate_multiplier"), Some(&json!(2.5)));
+        assert_eq!(
+            metadata.get("provider_actual_total_cost"),
+            Some(&json!(0.25))
+        );
+        assert_eq!(metadata.get("billed_actual_total_cost"), Some(&json!(0.5)));
+        assert_eq!(metadata.get("combined_rate_multiplier"), Some(&json!(2.5)));
+        assert_eq!(
+            metadata.get("settlement_snapshot_schema_version"),
+            Some(&json!("3.1"))
+        );
+        assert_eq!(
+            metadata.get("api_key_billing_multiplier"),
+            Some(&json!(2.0))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/base_total_cost"),
+            Some(&json!(0.2))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/total_cost"),
+            Some(&json!(0.2))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/provider_actual_total_cost"),
+            Some(&json!(0.25))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/pricing_snapshot/rate_multiplier"),
+            Some(&json!(2.5))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/pricing_snapshot/provider_rate_multiplier"),
+            Some(&json!(1.25))
+        );
+        assert_eq!(
+            metadata.pointer("/settlement_snapshot/actual_total_cost"),
+            Some(&json!(0.5))
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_api_key_multiplier_makes_user_charge_zero() {
+        let lookup = fixed_request_price_lookup("pay_as_you_go");
+        let mut event = fixed_request_price_event(Some(0.0));
+
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .expect("billing should succeed");
+
+        assert_eq!(event.data.total_cost_usd, Some(0.2));
+        assert_eq!(event.data.actual_total_cost_usd, Some(0.0));
+    }
+
+    #[tokio::test]
+    async fn free_tier_keeps_settlement_cost_zero_and_nominal_cost_unmodified() {
+        let lookup = fixed_request_price_lookup("free_tier");
+        let mut event = fixed_request_price_event(Some(2.0));
+
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .expect("billing should succeed");
+
+        assert_eq!(event.data.total_cost_usd, Some(0.2));
+        assert_eq!(event.data.actual_total_cost_usd, Some(0.0));
     }
 
     #[tokio::test]

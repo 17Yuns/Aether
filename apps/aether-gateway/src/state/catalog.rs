@@ -1194,6 +1194,7 @@ mod tests {
             user_allowed_models: None,
             api_key_id: "api-key-1".to_string(),
             api_key_name: Some("default".to_string()),
+            api_key_billing_multiplier: 1.0,
             api_key_is_active: true,
             api_key_is_locked: false,
             api_key_is_standalone: false,

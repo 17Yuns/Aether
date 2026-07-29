@@ -130,11 +130,23 @@ async fn execution_plan_balance_capacity_rejection_inner(
         validate_execution_plan_pricing_configuration_for_plan(state, plan, report_context).await?;
         return Ok(None);
     }
+    let billing_multiplier = aether_data::repository::auth::normalize_api_key_billing_multiplier(
+        Some(auth_context.api_key_billing_multiplier),
+    )
+    .map_err(|err| GatewayError::Internal(err.to_string()))?;
     let Some(available_usd) = available_balance_capacity_usd(state, auth_context).await? else {
         validate_execution_plan_pricing_configuration_for_plan(state, plan, report_context).await?;
         return Ok(None);
     };
-    match estimate_execution_plan_cost_upper_bound_usd(state, plan, report_context).await? {
+    let estimated_settlement_cost_usd =
+        estimate_execution_plan_cost_upper_bound_usd(state, plan, report_context).await?;
+    let estimated_billed_cost_usd = if billing_multiplier == 0.0 {
+        Some(0.0)
+    } else {
+        estimated_settlement_cost_usd
+            .map(|value| aether_billing::quantize_cost(value * billing_multiplier))
+    };
+    match estimated_billed_cost_usd {
         Some(estimated_cost_usd)
             if estimated_cost_usd <= available_usd + DAILY_QUOTA_EPSILON_USD =>
         {
@@ -915,6 +927,7 @@ mod tests {
             api_key_id: "api-key-1".to_string(),
             username: None,
             api_key_name: None,
+            api_key_billing_multiplier: 1.0,
             balance_remaining: None,
             access_allowed: true,
             user_rate_limit: None,
@@ -1792,7 +1805,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_balance_allows_a_proven_free_tier_execution_plan() {
+    async fn provider_free_tier_allows_zero_balance_at_default_multiplier() {
         let context = billing_context_with_pricing(
             Some(json!({
                 "tiers": [{
@@ -1827,6 +1840,107 @@ mod tests {
         .expect("free tier capacity check should resolve");
 
         assert_eq!(rejection, None);
+    }
+
+    #[tokio::test]
+    async fn api_key_billing_multiplier_scales_known_cost_capacity() {
+        let context = billing_context_with_pricing(
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 0.0,
+                    "output_price_per_1m": 20.0
+                }]
+            })),
+            None,
+            Some(json!({"openai:chat": 1.5})),
+            None,
+        );
+        let state = state_with_quota_and_wallet(quota_availability(45.0, false), context);
+        let mut decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
+        let plan = execution_plan(
+            json!({
+                "model": "gpt-5",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1_000_000
+            }),
+            "openai:chat",
+        );
+        let report_context = billing_report_context();
+
+        assert_eq!(
+            execution_plan_balance_capacity_rejection(
+                &state,
+                &decision,
+                &plan,
+                Some(&report_context),
+            )
+            .await
+            .expect("default multiplier capacity should resolve"),
+            None
+        );
+
+        decision
+            .auth_context
+            .as_mut()
+            .expect("auth context should exist")
+            .api_key_billing_multiplier = 2.0;
+        assert_eq!(
+            execution_plan_balance_capacity_rejection(
+                &state,
+                &decision,
+                &plan,
+                Some(&report_context),
+            )
+            .await
+            .expect("multiplied capacity should resolve"),
+            Some(GatewayLocalAuthRejection::BalanceDenied {
+                remaining: Some(45.0),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_api_key_billing_multiplier_allows_zero_balance() {
+        let context = billing_context_with_pricing(
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 100.0,
+                    "output_price_per_1m": 100.0
+                }]
+            })),
+            None,
+            None,
+            None,
+        );
+        let state = state_with_quota_and_wallet(quota_availability(0.0, false), context);
+        let mut decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
+        decision
+            .auth_context
+            .as_mut()
+            .expect("auth context should exist")
+            .api_key_billing_multiplier = 0.0;
+        let plan = execution_plan(
+            json!({
+                "model": "gpt-5",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1_000_000
+            }),
+            "openai:chat",
+        );
+
+        assert_eq!(
+            execution_plan_balance_capacity_rejection(
+                &state,
+                &decision,
+                &plan,
+                Some(&billing_report_context()),
+            )
+            .await
+            .expect("zero multiplier capacity should resolve"),
+            None
+        );
     }
 
     #[tokio::test]

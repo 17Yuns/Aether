@@ -71,6 +71,10 @@ impl LocalVideoTaskPersistence {
                 .unwrap_or_else(|| plan.request_id.clone()),
             username: context_text(report_context, "username"),
             api_key_name: context_text(report_context, "api_key_name"),
+            api_key_billing_multiplier: report_context
+                .get("api_key_billing_multiplier")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite()),
             client_api_format: context_text(report_context, "client_api_format")
                 .unwrap_or_else(|| plan.client_api_format.clone()),
             provider_api_format: context_text(report_context, "provider_api_format")
@@ -96,6 +100,12 @@ impl LocalVideoTaskPersistence {
             request_id: task.request_id.clone(),
             username: task.username.clone(),
             api_key_name: task.api_key_name.clone(),
+            api_key_billing_multiplier: task
+                .request_metadata
+                .as_ref()
+                .and_then(|value| value.get("api_key_billing_multiplier"))
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite()),
             client_api_format,
             provider_api_format,
             original_request_body: task

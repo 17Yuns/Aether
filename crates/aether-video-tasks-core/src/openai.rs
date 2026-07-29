@@ -624,6 +624,7 @@ impl OpenAiVideoTaskSeed {
             video_url: self.video_url.clone(),
             request_metadata: Some(json!({
                 "rust_owner": "async_task",
+                "api_key_billing_multiplier": self.persistence.api_key_billing_multiplier,
                 "rust_local_snapshot": LocalVideoTaskSnapshot::OpenAi(self.clone()),
             })),
         }

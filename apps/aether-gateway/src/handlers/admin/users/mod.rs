@@ -44,7 +44,6 @@ use self::sessions::{
     build_admin_delete_user_session_response, build_admin_delete_user_sessions_response,
     build_admin_list_user_sessions_response,
 };
-use self::shared::AdminUpdateUserPatch;
 use self::shared::{
     admin_default_user_initial_gift, build_admin_users_bad_request_response,
     build_admin_users_data_unavailable_response, build_admin_users_read_only_response,
@@ -59,6 +58,7 @@ pub(crate) use self::shared::{
     normalize_admin_user_api_formats, normalize_admin_user_ip_rules,
     normalize_admin_user_string_list,
 };
+use self::shared::{AdminUpdateUserApiKeyPatch, AdminUpdateUserPatch};
 pub(crate) use crate::handlers::shared::normalize_feature_settings as normalize_admin_feature_settings;
 
 pub(crate) async fn maybe_build_local_admin_users_response(

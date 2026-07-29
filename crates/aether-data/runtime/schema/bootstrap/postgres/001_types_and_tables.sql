@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS public.api_keys (
     total_requests bigint DEFAULT 0,
     total_tokens bigint DEFAULT '0'::bigint NOT NULL,
     total_cost_usd numeric(20,8) DEFAULT '0'::double precision,
+    billing_multiplier double precision DEFAULT '1'::double precision NOT NULL,
     is_standalone boolean DEFAULT false NOT NULL,
     allowed_providers json,
     allowed_api_formats json,

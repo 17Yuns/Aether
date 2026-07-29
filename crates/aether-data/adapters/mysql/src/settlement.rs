@@ -3,8 +3,8 @@ use sqlx::{mysql::MySqlRow, Row};
 
 use aether_data_contracts::repository::settlement::{
     finite_wallet_available_usd, plan_finite_wallet_debit, settlement_billable_cost_usd,
-    settlement_billing_status_for_usage_status, SettlementWriteRepository, StoredUsageSettlement,
-    UsageSettlementInput, SETTLEMENT_EPSILON_USD,
+    settlement_billing_status_for_usage_status, settlement_provider_usage_cost_usd,
+    SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
 };
 use aether_data_contracts::DataLayerError;
 
@@ -663,7 +663,7 @@ WHERE id = ?
                     &mut tx,
                     &input.request_id,
                     provider_id,
-                    input.actual_total_cost_usd,
+                    settlement_provider_usage_cost_usd(&input),
                     updated_at,
                 )
                 .await?;
@@ -786,6 +786,7 @@ VALUES (
             billing_status: "pending".to_string(),
             total_cost_usd: 3.0,
             actual_total_cost_usd: 6.0,
+            provider_actual_total_cost_usd: Some(2.5),
             finalized_at_unix_secs: Some(1_234),
         };
         let first = repository
@@ -828,7 +829,7 @@ WHERE request_id = 'settlement-request-1'
         .fetch_one(&pool)
         .await
         .expect("provider delta should load");
-        assert_eq!(provider_delta, (1, 6.0));
+        assert_eq!(provider_delta, (1, 2.5));
 
         cleanup_settlement_rows(&pool).await;
     }

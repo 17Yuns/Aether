@@ -125,6 +125,8 @@ pub struct LocalVideoTaskPersistence {
     pub request_id: String,
     pub username: Option<String>,
     pub api_key_name: Option<String>,
+    #[serde(default)]
+    pub api_key_billing_multiplier: Option<f64>,
     pub client_api_format: String,
     pub provider_api_format: String,
     pub original_request_body: Value,

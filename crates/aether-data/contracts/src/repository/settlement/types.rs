@@ -12,6 +12,8 @@ pub struct UsageSettlementInput {
     pub billing_status: String,
     pub total_cost_usd: f64,
     pub actual_total_cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_actual_total_cost_usd: Option<f64>,
     pub finalized_at_unix_secs: Option<u64>,
 }
 
@@ -27,7 +29,12 @@ impl UsageSettlementInput {
                 "settlement status cannot be empty".to_string(),
             ));
         }
-        if !self.total_cost_usd.is_finite() || !self.actual_total_cost_usd.is_finite() {
+        if !self.total_cost_usd.is_finite()
+            || !self.actual_total_cost_usd.is_finite()
+            || self
+                .provider_actual_total_cost_usd
+                .is_some_and(|value| !value.is_finite())
+        {
             return Err(crate::DataLayerError::InvalidInput(
                 "settlement cost must be finite".to_string(),
             ));
@@ -113,9 +120,16 @@ pub fn settlement_billable_cost_usd(input: &UsageSettlementInput) -> f64 {
     input.actual_total_cost_usd.max(0.0)
 }
 
+pub fn settlement_provider_usage_cost_usd(input: &UsageSettlementInput) -> f64 {
+    input
+        .provider_actual_total_cost_usd
+        .unwrap_or(input.actual_total_cost_usd)
+        .max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::UsageSettlementInput;
+    use super::{settlement_provider_usage_cost_usd, UsageSettlementInput};
 
     #[test]
     fn rejects_invalid_settlement_input() {
@@ -129,8 +143,30 @@ mod tests {
             billing_status: "pending".to_string(),
             total_cost_usd: 0.1,
             actual_total_cost_usd: 0.1,
+            provider_actual_total_cost_usd: None,
             finalized_at_unix_secs: None,
         };
         assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn provider_usage_cost_prefers_explicit_provider_cost_and_falls_back() {
+        let mut input = UsageSettlementInput {
+            request_id: "request-1".to_string(),
+            user_id: None,
+            api_key_id: None,
+            api_key_is_standalone: false,
+            provider_id: Some("provider-1".to_string()),
+            status: "completed".to_string(),
+            billing_status: "pending".to_string(),
+            total_cost_usd: 1.0,
+            actual_total_cost_usd: 2.0,
+            provider_actual_total_cost_usd: None,
+            finalized_at_unix_secs: None,
+        };
+        assert_eq!(settlement_provider_usage_cost_usd(&input), 2.0);
+
+        input.provider_actual_total_cost_usd = Some(0.75);
+        assert_eq!(settlement_provider_usage_cost_usd(&input), 0.75);
     }
 }

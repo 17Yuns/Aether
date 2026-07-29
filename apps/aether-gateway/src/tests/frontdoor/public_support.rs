@@ -6693,6 +6693,8 @@ async fn gateway_handles_users_me_api_keys_locally_without_proxying_upstream() {
             false,
         )
         .expect("export record should build")
+        .with_billing_multiplier(Some(1.75))
+        .expect("billing multiplier should be valid")
         .with_activity_timestamps(
             Some(1_711_000_102),
             Some(1_711_000_100),
@@ -6740,13 +6742,12 @@ async fn gateway_handles_users_me_api_keys_locally_without_proxying_upstream() {
     assert_eq!(api_keys[0]["key_display"], "sk-user-li...ve-1");
     assert_eq!(api_keys[0]["total_requests"], 9);
     assert_eq!(api_keys[0]["total_cost_usd"], 1.5);
+    assert_eq!(api_keys[0]["billing_multiplier"], 1.75);
     assert_eq!(api_keys[0]["created_at"], "2024-03-21T05:48:20+00:00");
     assert_eq!(api_keys[0]["last_used_at"], "2024-03-21T05:48:22+00:00");
 
     let detail_response = client
-        .get(format!(
-            "{gateway_url}/api/users/me/api-keys/user-key-1?include_key=true"
-        ))
+        .get(format!("{gateway_url}/api/users/me/api-keys/user-key-1"))
         .header("authorization", format!("Bearer {access_token}"))
         .header("x-client-device-id", "device-users-me-api-keys")
         .header("user-agent", "AetherTest/1.0")
@@ -6759,7 +6760,25 @@ async fn gateway_handles_users_me_api_keys_locally_without_proxying_upstream() {
         .json()
         .await
         .expect("json body should parse");
-    assert_eq!(detail_payload["key"], "sk-user-live-1");
+    assert_eq!(detail_payload["billing_multiplier"], 1.75);
+
+    let full_key_response = client
+        .get(format!(
+            "{gateway_url}/api/users/me/api-keys/user-key-1?include_key=true"
+        ))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-api-keys")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(full_key_response.status(), StatusCode::OK);
+    let full_key_payload: serde_json::Value = full_key_response
+        .json()
+        .await
+        .expect("json body should parse");
+    assert_eq!(full_key_payload["key"], "sk-user-live-1");
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -7136,6 +7155,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
     assert_eq!(create_payload["name"], "writer-key");
     assert_eq!(create_payload["rate_limit"], 120);
     assert_eq!(create_payload["concurrent_limit"], serde_json::Value::Null);
+    assert_eq!(create_payload["billing_multiplier"], 1.0);
     assert_eq!(create_payload["feature_settings"], serde_json::Value::Null);
     assert_eq!(create_payload["message"], "API密钥创建成功");
     let created_at = create_payload["created_at"]
@@ -7174,6 +7194,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
     assert_eq!(update_payload["name"], "writer-key-renamed");
     assert_eq!(update_payload["rate_limit"], 30);
     assert_eq!(update_payload["concurrent_limit"], 4);
+    assert_eq!(update_payload["billing_multiplier"], 1.0);
     assert_eq!(
         update_payload["feature_settings"]["chat_pii_redaction"]["enabled"],
         true
@@ -7256,6 +7277,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
         json!(["provider-openai"])
     );
     assert_eq!(detail_payload["concurrent_limit"], 4);
+    assert_eq!(detail_payload["billing_multiplier"], 1.0);
     assert_eq!(detail_payload["force_capabilities"], json!({}));
     assert_eq!(detail_payload["created_at"], created_at);
     assert_eq!(

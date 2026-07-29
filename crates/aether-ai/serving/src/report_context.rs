@@ -64,6 +64,10 @@ pub fn build_ai_execution_report_context(parts: AiExecutionReportContextParts<'_
         Value::Bool(parts.auth_context.api_key_is_standalone),
     );
     object.insert(
+        "api_key_billing_multiplier".to_string(),
+        Value::from(parts.auth_context.api_key_billing_multiplier),
+    );
+    object.insert(
         "username".to_string(),
         parts
             .auth_context
@@ -266,6 +270,7 @@ mod tests {
             api_key_id: "key-1".to_string(),
             username: Some("alice".to_string()),
             api_key_name: Some("primary".to_string()),
+            api_key_billing_multiplier: 1.75,
             balance_remaining: Some(42.0),
             access_allowed: true,
             api_key_is_standalone: false,
@@ -330,6 +335,7 @@ mod tests {
         });
 
         assert_eq!(report["user_id"], "user-1");
+        assert_eq!(report["api_key_billing_multiplier"], 1.75);
         assert_eq!(report["candidate_index"], 3);
         assert_eq!(report["retry_index"], 1);
         assert_eq!(report["pool_key_index"], 0);

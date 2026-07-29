@@ -1035,7 +1035,8 @@ async fn gateway_imports_admin_system_users_locally_and_persists_data_impl() {
                     "auto_delete_on_expiry": false,
                     "total_requests": 12,
                     "total_tokens": 3456,
-                    "total_cost_usd": "1.25000000"
+                    "total_cost_usd": "1.25000000",
+                    "billing_multiplier": 1.5
                 }]
             }],
             "standalone_keys": [{
@@ -1052,6 +1053,7 @@ async fn gateway_imports_admin_system_users_locally_and_persists_data_impl() {
                 "total_requests": 3,
                 "total_tokens": 789,
                 "total_cost_usd": "0.75000000",
+                "billing_multiplier": 2.25,
                 "wallet": {
                     "balance": 30.0,
                     "recharge_balance": 20.0,
@@ -1151,6 +1153,7 @@ async fn gateway_imports_admin_system_users_locally_and_persists_data_impl() {
     assert_eq!(user_api_keys[0].total_requests, 12);
     assert_eq!(user_api_keys[0].total_tokens, 3456);
     assert_eq!(user_api_keys[0].total_cost_usd, 1.25);
+    assert_eq!(user_api_keys[0].billing_multiplier, 1.5);
     assert_eq!(
         user_api_keys[0].allowed_api_formats,
         Some(vec!["openai:chat".to_string()])
@@ -1179,6 +1182,7 @@ async fn gateway_imports_admin_system_users_locally_and_persists_data_impl() {
     assert_eq!(standalone_keys[0].total_requests, 3);
     assert_eq!(standalone_keys[0].total_tokens, 789);
     assert_eq!(standalone_keys[0].total_cost_usd, 0.75);
+    assert_eq!(standalone_keys[0].billing_multiplier, 2.25);
     assert_eq!(
         decrypt_python_fernet_ciphertext(
             DEVELOPMENT_ENCRYPTION_KEY,
@@ -1380,7 +1384,8 @@ async fn gateway_overwrites_existing_admin_system_user_key_usage_totals_impl() {
                     "is_active": true,
                     "total_requests": 222,
                     "total_tokens": 3333,
-                    "total_cost_usd": 4.56
+                    "total_cost_usd": 4.56,
+                    "billing_multiplier": 1.75
                 }]
             }],
             "standalone_keys": [{
@@ -1390,7 +1395,8 @@ async fn gateway_overwrites_existing_admin_system_user_key_usage_totals_impl() {
                 "is_active": true,
                 "total_requests": 444,
                 "total_tokens": 5555,
-                "total_cost_usd": 6.78
+                "total_cost_usd": 6.78,
+                "billing_multiplier": 2.5
             }]
         }))
         .send()
@@ -1418,6 +1424,7 @@ async fn gateway_overwrites_existing_admin_system_user_key_usage_totals_impl() {
     assert_eq!(user_key.total_requests, 222);
     assert_eq!(user_key.total_tokens, 3333);
     assert_eq!(user_key.total_cost_usd, 4.56);
+    assert_eq!(user_key.billing_multiplier, 1.75);
     let standalone_key = updated_records
         .iter()
         .find(|record| record.api_key_id == "key-standalone-existing")
@@ -1425,6 +1432,7 @@ async fn gateway_overwrites_existing_admin_system_user_key_usage_totals_impl() {
     assert_eq!(standalone_key.total_requests, 444);
     assert_eq!(standalone_key.total_tokens, 5555);
     assert_eq!(standalone_key.total_cost_usd, 6.78);
+    assert_eq!(standalone_key.billing_multiplier, 2.5);
 
     gateway_handle.abort();
 }

@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite};
 
 use aether_data_contracts::repository::auth::{
-    AuthApiKeyExportSummary, AuthApiKeyLookupKey, AuthApiKeyReadRepository,
-    AuthApiKeyWriteRepository, CreateStandaloneApiKeyRecord, CreateUserApiKeyRecord,
-    StandaloneApiKeyExportListQuery, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
-    UpdateStandaloneApiKeyBasicRecord, UpdateUserApiKeyBasicRecord,
+    normalize_api_key_billing_multiplier, AuthApiKeyExportSummary, AuthApiKeyLookupKey,
+    AuthApiKeyReadRepository, AuthApiKeyWriteRepository, CreateStandaloneApiKeyRecord,
+    CreateUserApiKeyRecord, StandaloneApiKeyExportListQuery, StoredAuthApiKeyExportRecord,
+    StoredAuthApiKeySnapshot, UpdateStandaloneApiKeyBasicRecord, UpdateUserApiKeyBasicRecord,
 };
 use aether_data_contracts::DataLayerError;
 
@@ -36,7 +36,8 @@ SELECT
   api_keys.allowed_providers AS api_key_allowed_providers,
   api_keys.allowed_api_formats AS api_key_allowed_api_formats,
   api_keys.allowed_models AS api_key_allowed_models,
-  api_keys.ip_rules AS api_key_ip_rules
+  api_keys.ip_rules AS api_key_ip_rules,
+  CAST(COALESCE(api_keys.billing_multiplier, 1.0) AS REAL) AS api_key_billing_multiplier
 FROM api_keys
 JOIN users ON users.id = api_keys.user_id
 "#;
@@ -62,6 +63,7 @@ SELECT
   api_keys.total_requests,
   COALESCE(api_keys.total_tokens, 0) AS total_tokens,
   CAST(COALESCE(api_keys.total_cost_usd, 0) AS REAL) AS total_cost_usd,
+  CAST(COALESCE(api_keys.billing_multiplier, 1.0) AS REAL) AS billing_multiplier,
   api_keys.last_used_at AS last_used_at_unix_secs,
   api_keys.created_at AS created_at_unix_secs,
   api_keys.updated_at AS updated_at_unix_secs,
@@ -111,16 +113,18 @@ impl SqliteAuthApiKeyReadRepository {
         record: CreateApiKeyInsertRecord,
     ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
         let now = current_unix_secs();
+        let billing_multiplier =
+            normalize_api_key_billing_multiplier(Some(record.billing_multiplier))?;
         sqlx::query(
             r#"
 INSERT INTO api_keys (
   id, user_id, key_hash, key_encrypted, name, allowed_providers,
   allowed_api_formats, allowed_models, ip_rules, rate_limit, concurrent_limit,
   force_capabilities, feature_settings, is_active, expires_at, auto_delete_on_expiry,
-  total_requests, total_tokens, total_cost_usd, is_standalone,
+  total_requests, total_tokens, total_cost_usd, billing_multiplier, is_standalone,
   created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(&record.api_key_id)
@@ -162,6 +166,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         )?)
         .bind(i64_from_u64(record.total_tokens, "api_keys.total_tokens")?)
         .bind(record.total_cost_usd)
+        .bind(billing_multiplier)
         .bind(record.is_standalone)
         .bind(now as i64)
         .bind(now as i64)
@@ -192,6 +197,7 @@ struct CreateApiKeyInsertRecord {
     total_requests: u64,
     total_tokens: u64,
     total_cost_usd: f64,
+    billing_multiplier: f64,
     is_standalone: bool,
 }
 
@@ -435,6 +441,7 @@ WHERE id = ?
             total_requests: record.total_requests,
             total_tokens: record.total_tokens,
             total_cost_usd: record.total_cost_usd,
+            billing_multiplier: record.billing_multiplier,
             is_standalone: false,
         })
         .await
@@ -463,6 +470,7 @@ WHERE id = ?
             total_requests: record.total_requests,
             total_tokens: record.total_tokens,
             total_cost_usd: record.total_cost_usd,
+            billing_multiplier: record.billing_multiplier,
             is_standalone: true,
         })
         .await
@@ -473,6 +481,7 @@ WHERE id = ?
         record: UpdateUserApiKeyBasicRecord,
     ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
         let now = current_unix_secs() as i64;
+        let billing_multiplier = normalize_api_key_billing_multiplier(record.billing_multiplier)?;
         sqlx::query(
             r#"
 UPDATE api_keys
@@ -480,6 +489,7 @@ SET name = COALESCE(?, name),
     rate_limit = COALESCE(?, rate_limit),
     concurrent_limit = COALESCE(?, concurrent_limit),
     ip_rules = CASE WHEN ? THEN ? ELSE ip_rules END,
+    billing_multiplier = CASE WHEN ? THEN ? ELSE billing_multiplier END,
     updated_at = ?
 WHERE id = ?
   AND user_id = ?
@@ -494,6 +504,8 @@ WHERE id = ?
             &record.ip_rules,
             "api_keys.ip_rules",
         )?)
+        .bind(record.billing_multiplier_present)
+        .bind(billing_multiplier)
         .bind(now)
         .bind(&record.api_key_id)
         .bind(&record.user_id)
@@ -508,6 +520,7 @@ WHERE id = ?
         record: UpdateStandaloneApiKeyBasicRecord,
     ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
         let now = current_unix_secs() as i64;
+        let billing_multiplier = normalize_api_key_billing_multiplier(record.billing_multiplier)?;
         sqlx::query(
             r#"
 UPDATE api_keys
@@ -520,6 +533,7 @@ SET name = COALESCE(?, name),
     ip_rules = CASE WHEN ? THEN ? ELSE ip_rules END,
     expires_at = CASE WHEN ? THEN ? ELSE expires_at END,
     auto_delete_on_expiry = CASE WHEN ? THEN ? ELSE auto_delete_on_expiry END,
+    billing_multiplier = CASE WHEN ? THEN ? ELSE billing_multiplier END,
     updated_at = ?
 WHERE id = ?
   AND is_standalone = 1
@@ -557,6 +571,8 @@ WHERE id = ?
         )?)
         .bind(record.auto_delete_on_expiry_present)
         .bind(record.auto_delete_on_expiry)
+        .bind(record.billing_multiplier_present)
+        .bind(billing_multiplier)
         .bind(now)
         .bind(&record.api_key_id)
         .execute(&self.pool)
@@ -976,7 +992,10 @@ fn map_auth_api_key_snapshot_row(
     .with_api_key_ip_rules(optional_json_from_string(
         row.try_get("api_key_ip_rules").map_sql_err()?,
         "api_keys.ip_rules",
-    )?)?;
+    )?)?
+    .with_api_key_billing_multiplier(Some(
+        row.try_get("api_key_billing_multiplier").map_sql_err()?,
+    ))?;
     Ok(snapshot.with_user_rate_limit(row.try_get("user_rate_limit").map_sql_err()?))
 }
 
@@ -1024,6 +1043,9 @@ fn map_auth_api_key_export_row(
             row.try_get("ip_rules").map_sql_err()?,
             "api_keys.ip_rules",
         )?)
+    })
+    .and_then(|record| {
+        record.with_billing_multiplier(Some(row.try_get("billing_multiplier").map_sql_err()?))
     })
     .map(|record| record.with_feature_settings(feature_settings))
     .and_then(|record| {
@@ -1151,6 +1173,7 @@ mod tests {
                 total_requests: 3,
                 total_tokens: 42,
                 total_cost_usd: 0.25,
+                billing_multiplier: 1.5,
             })
             .await
             .expect("user key should create")
@@ -1166,12 +1189,15 @@ mod tests {
                 rate_limit: Some(150),
                 concurrent_limit: Some(6),
                 ip_rules: Some(Some(vec!["10.0.0.0/24".to_string()])),
+                billing_multiplier_present: true,
+                billing_multiplier: Some(2.0),
             })
             .await
             .expect("user key should update")
             .expect("user key should reload");
         assert_eq!(updated_user_key.name, Some("Updated User".to_string()));
         assert_eq!(updated_user_key.concurrent_limit, Some(6));
+        assert_eq!(updated_user_key.billing_multiplier, 2.0);
 
         assert!(repository
             .set_user_api_key_locked("user-1", "key-created-user", true)
@@ -1251,6 +1277,7 @@ mod tests {
                 total_requests: 0,
                 total_tokens: 0,
                 total_cost_usd: 0.0,
+                billing_multiplier: 1.25,
             })
             .await
             .expect("standalone key should create")
@@ -1273,11 +1300,14 @@ mod tests {
                 expires_at_unix_secs: Some(2_100_000_000),
                 auto_delete_on_expiry_present: true,
                 auto_delete_on_expiry: true,
+                billing_multiplier_present: true,
+                billing_multiplier: Some(1.75),
             })
             .await
             .expect("standalone key should update")
             .expect("standalone key should reload");
         assert_eq!(standalone.name, Some("Updated Standalone".to_string()));
+        assert_eq!(standalone.billing_multiplier, 1.75);
         assert_eq!(standalone.allowed_providers, None);
         assert_eq!(
             standalone.allowed_api_formats,

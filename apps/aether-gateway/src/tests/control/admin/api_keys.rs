@@ -519,6 +519,7 @@ async fn gateway_handles_admin_api_keys_create_locally_with_trusted_admin_princi
             .json(&json!({
                 "name": "standalone-key",
                 "rate_limit": null,
+                "billing_multiplier": 1.5,
                 "allowed_providers": ["openai"],
                 "allowed_api_formats": ["openai:chat"],
                 "allowed_models": ["gpt-4.1"],
@@ -536,6 +537,7 @@ async fn gateway_handles_admin_api_keys_create_locally_with_trusted_admin_princi
     assert_eq!(payload["is_standalone"], json!(true));
     assert_eq!(payload["rate_limit"], serde_json::Value::Null);
     assert_eq!(payload["concurrent_limit"], serde_json::Value::Null);
+    assert_eq!(payload["billing_multiplier"], json!(1.5));
     assert_eq!(payload["allowed_providers"], json!(["openai"]));
     assert_eq!(payload["allowed_api_formats"], json!(["openai:chat"]));
     assert_eq!(payload["allowed_models"], json!(["gpt-4.1"]));
@@ -564,6 +566,10 @@ async fn gateway_handles_admin_api_keys_create_locally_with_trusted_admin_princi
         list_response.json().await.expect("list json should parse");
     assert_eq!(list_payload["total"], json!(1));
     assert_eq!(list_payload["api_keys"][0]["name"], json!("standalone-key"));
+    assert_eq!(
+        list_payload["api_keys"][0]["billing_multiplier"],
+        json!(1.5)
+    );
 
     gateway_handle.abort();
     upstream_handle.abort();
@@ -605,6 +611,7 @@ async fn gateway_handles_admin_api_keys_update_locally_with_trusted_admin_princi
         "name": "renamed-key",
         "rate_limit": null,
         "concurrent_limit": 12,
+        "billing_multiplier": 2.25,
         "allowed_providers": ["gemini"],
         "allowed_api_formats": ["gemini:generate_content"],
         "allowed_models": ["gemini-2.5-pro"],
@@ -622,6 +629,7 @@ async fn gateway_handles_admin_api_keys_update_locally_with_trusted_admin_princi
     assert_eq!(payload["name"], json!("renamed-key"));
     assert_eq!(payload["rate_limit"], serde_json::Value::Null);
     assert_eq!(payload["concurrent_limit"], json!(12));
+    assert_eq!(payload["billing_multiplier"], json!(2.25));
     assert_eq!(payload["allowed_providers"], json!(["gemini"]));
     assert_eq!(
         payload["allowed_api_formats"],

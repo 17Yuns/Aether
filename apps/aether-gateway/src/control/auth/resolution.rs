@@ -77,6 +77,8 @@ pub(crate) struct GatewayControlAuthContext {
     pub(crate) username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) api_key_name: Option<String>,
+    #[serde(default = "default_api_key_billing_multiplier")]
+    pub(crate) api_key_billing_multiplier: f64,
     pub(crate) balance_remaining: Option<f64>,
     pub(crate) access_allowed: bool,
     #[serde(skip)]
@@ -93,6 +95,10 @@ pub(crate) struct GatewayControlAuthContext {
     pub(crate) allowed_models: Option<Vec<String>>,
     #[serde(skip)]
     pub(crate) ip_rules: Option<Vec<String>>,
+}
+
+fn default_api_key_billing_multiplier() -> f64 {
+    aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -918,6 +924,7 @@ pub(super) async fn resolve_data_backed_auth_context(
                     api_key_id: String::new(),
                     username: None,
                     api_key_name: None,
+                    api_key_billing_multiplier: default_api_key_billing_multiplier(),
                     balance_remaining: None,
                     access_allowed: false,
                     user_rate_limit: None,
@@ -1031,6 +1038,7 @@ async fn resolve_antigravity_bearer_bridge_auth_context(
             api_key_id: api_key_id.to_string(),
             username: None,
             api_key_name: None,
+            api_key_billing_multiplier: default_api_key_billing_multiplier(),
             balance_remaining: None,
             access_allowed: false,
             user_rate_limit: None,
@@ -1090,6 +1098,7 @@ async fn resolve_trusted_auth_context(
             api_key_id: trusted_headers.api_key_id,
             username: None,
             api_key_name: None,
+            api_key_billing_multiplier: default_api_key_billing_multiplier(),
             balance_remaining: trusted_headers.balance_remaining,
             access_allowed: false,
             user_rate_limit: None,
@@ -1185,6 +1194,7 @@ async fn build_data_backed_auth_context(
     GatewayControlAuthContext {
         username: Some(snapshot.username.clone()),
         api_key_name: snapshot.api_key_name.clone(),
+        api_key_billing_multiplier: snapshot.api_key_billing_multiplier,
         user_id: snapshot.user_id,
         api_key_id: snapshot.api_key_id,
         balance_remaining: wallet_remaining.or(balance_remaining),
@@ -1700,9 +1710,11 @@ mod tests {
     #[tokio::test]
     async fn data_backed_api_key_auth_touches_last_used_once_per_throttle_window() {
         let api_key = "sk-test-touch";
+        let mut snapshot = sample_snapshot("key-1", "user-1");
+        snapshot.api_key_billing_multiplier = 1.75;
         let repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
             Some(hash_api_key(api_key)),
-            sample_snapshot("key-1", "user-1"),
+            snapshot,
         )]));
         let data = GatewayDataState::with_auth_api_key_repository_for_tests(repository.clone());
         let state = AppState::new()
@@ -1726,6 +1738,7 @@ mod tests {
         .expect("auth context should exist");
         assert_eq!(first.user_id, "user-1");
         assert_eq!(first.api_key_id, "key-1");
+        assert_eq!(first.api_key_billing_multiplier, 1.75);
         assert_eq!(repository.touch_count("key-1"), 1);
 
         let second = resolve_data_backed_auth_context(
@@ -1738,6 +1751,7 @@ mod tests {
         .expect("resolution should succeed")
         .expect("auth context should exist");
         assert_eq!(second.api_key_id, "key-1");
+        assert_eq!(second.api_key_billing_multiplier, 1.75);
         assert_eq!(repository.touch_count("key-1"), 1);
     }
 

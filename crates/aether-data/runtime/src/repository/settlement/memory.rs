@@ -5,8 +5,8 @@ use async_trait::async_trait;
 
 use super::{
     plan_finite_wallet_debit, settlement_billable_cost_usd,
-    settlement_billing_status_for_usage_status, SettlementWriteRepository, StoredUsageSettlement,
-    UsageSettlementInput, SETTLEMENT_EPSILON_USD,
+    settlement_billing_status_for_usage_status, settlement_provider_usage_cost_usd,
+    SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
 };
 use crate::repository::wallet::{InMemoryWalletRepository, StoredWalletSnapshot};
 use crate::DataLayerError;
@@ -106,6 +106,7 @@ impl SettlementWriteRepository for InMemorySettlementRepository {
         let mut final_billing_status =
             settlement_billing_status_for_usage_status(&input.status).to_string();
         let billable_cost_usd = settlement_billable_cost_usd(&input);
+        let provider_usage_cost_usd = settlement_provider_usage_cost_usd(&input);
         let mut settlement = self.wallets.with_mut(|wallets| {
             let wallet_id = input
                 .api_key_id
@@ -189,7 +190,7 @@ impl SettlementWriteRepository for InMemorySettlementRepository {
                     .write()
                     .expect("provider quota lock");
                 let value = quotas.entry(provider_id).or_insert(0.0);
-                *value += input.actual_total_cost_usd;
+                *value += provider_usage_cost_usd;
                 settlement.provider_monthly_used_usd = Some(*value);
             }
         }
@@ -261,6 +262,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
+                provider_actual_total_cost_usd: Some(2.5),
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -270,7 +272,7 @@ mod tests {
         assert_eq!(settlement.billing_status, "settled");
         assert_eq!(settlement.wallet_balance_before, Some(12.0));
         assert_eq!(settlement.wallet_balance_after, Some(6.0));
-        assert_eq!(settlement.provider_monthly_used_usd, Some(6.0));
+        assert_eq!(settlement.provider_monthly_used_usd, Some(2.5));
     }
 
     #[tokio::test]
@@ -288,6 +290,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -313,6 +316,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -342,6 +346,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 1.5,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -368,6 +373,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 15.0,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -396,6 +402,7 @@ mod tests {
                 billing_status: "pending".to_string(),
                 total_cost_usd: 2.0,
                 actual_total_cost_usd: 1.0,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(250),
             })
             .await
@@ -413,6 +420,7 @@ mod tests {
                 billing_status: "settled".to_string(),
                 total_cost_usd: 2.0,
                 actual_total_cost_usd: 1.0,
+                provider_actual_total_cost_usd: None,
                 finalized_at_unix_secs: Some(250),
             })
             .await

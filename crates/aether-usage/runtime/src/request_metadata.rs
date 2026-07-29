@@ -130,6 +130,7 @@ pub(crate) fn retain_first_byte_request_metadata(value: Option<Value>) -> Option
                 | "upstream_is_stream"
                 | "client_session_affinity"
                 | "api_key_is_standalone"
+                | "api_key_billing_multiplier"
                 | "request_path"
                 | "request_query_string"
                 | "request_path_and_query"
@@ -347,6 +348,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_bool(source, target, UPSTREAM_IS_STREAM_KEY);
     copy_non_null_value(source, target, "client_session_affinity");
     copy_bool(source, target, "api_key_is_standalone");
+    copy_number(source, target, "api_key_billing_multiplier");
     copy_non_empty_string(source, target, "request_path");
     copy_non_empty_string(source, target, "request_query_string");
     copy_non_empty_string(source, target, "request_path_and_query");
@@ -374,6 +376,11 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_non_null_value(source, target, "scheduling_audit");
     copy_non_null_value(source, target, "tls_fingerprint");
     copy_number(source, target, "rate_multiplier");
+    copy_number(source, target, "provider_rate_multiplier");
+    copy_number(source, target, "combined_rate_multiplier");
+    copy_number(source, target, "base_total_cost");
+    copy_number(source, target, "provider_actual_total_cost");
+    copy_number(source, target, "billed_actual_total_cost");
     copy_bool(source, target, "is_free_tier");
     copy_number(source, target, "input_price_per_1m");
     copy_number(source, target, "output_price_per_1m");
@@ -395,6 +402,7 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_bool(&mut source, target, UPSTREAM_IS_STREAM_KEY);
     remove_non_null_value(&mut source, target, "client_session_affinity");
     remove_bool(&mut source, target, "api_key_is_standalone");
+    remove_number(&mut source, target, "api_key_billing_multiplier");
     remove_non_empty_string(&mut source, target, "request_path");
     remove_non_empty_string(&mut source, target, "request_query_string");
     remove_non_empty_string(&mut source, target, "request_path_and_query");
@@ -426,6 +434,11 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_non_null_value(&mut source, target, "scheduling_audit");
     remove_non_null_value(&mut source, target, "tls_fingerprint");
     remove_number(&mut source, target, "rate_multiplier");
+    remove_number(&mut source, target, "provider_rate_multiplier");
+    remove_number(&mut source, target, "combined_rate_multiplier");
+    remove_number(&mut source, target, "base_total_cost");
+    remove_number(&mut source, target, "provider_actual_total_cost");
+    remove_number(&mut source, target, "billed_actual_total_cost");
     remove_bool(&mut source, target, "is_free_tier");
     remove_number(&mut source, target, "input_price_per_1m");
     remove_number(&mut source, target, "output_price_per_1m");

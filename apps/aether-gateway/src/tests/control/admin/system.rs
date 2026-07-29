@@ -937,7 +937,9 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
                 12.34,
                 false,
             )
-            .expect("user api key export record should build"),
+            .expect("user api key export record should build")
+            .with_billing_multiplier(Some(1.5))
+            .expect("user billing multiplier should be valid"),
             StoredAuthApiKeyExportRecord::new(
                 "admin-owner".to_string(),
                 "key-standalone-1".to_string(),
@@ -964,7 +966,9 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
                 3.21,
                 true,
             )
-            .expect("standalone api key export record should build"),
+            .expect("standalone api key export record should build")
+            .with_billing_multiplier(Some(2.25))
+            .expect("standalone billing multiplier should be valid"),
         ]),
     );
     let wallet_repository = Arc::new(InMemoryWalletRepository::seed(vec![
@@ -1026,7 +1030,7 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
 
     assert_eq!(response.status(), StatusCode::OK);
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
-    assert_eq!(payload["version"], "1.5");
+    assert_eq!(payload["version"], "1.6");
     assert!(payload["exported_at"].as_str().is_some());
     assert_eq!(payload["user_groups"][0]["name"], "Restricted GPT");
     assert!(payload["user_groups"][0].get("priority").is_none());
@@ -1076,6 +1080,10 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
         json!(420)
     );
     assert_eq!(
+        payload["users"][0]["api_keys"][0]["billing_multiplier"],
+        json!(1.5)
+    );
+    assert_eq!(
         payload["standalone_keys"][0]["key"],
         json!("ak-standalone-live-1")
     );
@@ -1084,6 +1092,10 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
         json!("key-standalone-1")
     );
     assert_eq!(payload["standalone_keys"][0]["total_tokens"], json!(84));
+    assert_eq!(
+        payload["standalone_keys"][0]["billing_multiplier"],
+        json!(2.25)
+    );
     assert_eq!(
         payload["standalone_keys"][0]["wallet"]["unlimited"],
         json!(true)

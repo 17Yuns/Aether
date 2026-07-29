@@ -41,6 +41,7 @@ pub async fn settle_usage_if_needed(
         billing_status: usage.billing_status.clone(),
         total_cost_usd: finite_cost(usage.total_cost_usd)?,
         actual_total_cost_usd: finite_cost(usage.actual_total_cost_usd)?,
+        provider_actual_total_cost_usd: usage.settlement_provider_actual_total_cost(),
         finalized_at_unix_secs,
     };
     let settlement_key = usage_settlement_lock_key(&input);
@@ -227,7 +228,27 @@ mod tests {
         assert_eq!(inputs[0].finalized_at_unix_secs, Some(200));
         assert_eq!(inputs[0].total_cost_usd, 1.25);
         assert_eq!(inputs[0].actual_total_cost_usd, 0.75);
+        assert_eq!(inputs[0].provider_actual_total_cost_usd, None);
         assert!(!inputs[0].api_key_is_standalone);
+    }
+
+    #[tokio::test]
+    async fn propagates_provider_cost_separately_from_billed_cost() {
+        let writer = TestSettlementWriter {
+            has_writer: true,
+            ..Default::default()
+        };
+        let mut usage = sample_usage();
+        usage.request_metadata = Some(json!({ "provider_actual_total_cost": 0.25 }));
+
+        settle_usage_if_needed(&writer, &usage)
+            .await
+            .expect("settlement should succeed");
+
+        let inputs = writer.inputs.lock().expect("settlement inputs lock");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].actual_total_cost_usd, 0.75);
+        assert_eq!(inputs[0].provider_actual_total_cost_usd, Some(0.25));
     }
 
     #[tokio::test]

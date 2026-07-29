@@ -3,8 +3,8 @@ use sqlx::{PgPool, Row};
 
 use aether_data_contracts::repository::settlement::{
     finite_wallet_available_usd, plan_finite_wallet_debit, settlement_billable_cost_usd,
-    settlement_billing_status_for_usage_status, SettlementWriteRepository, StoredUsageSettlement,
-    UsageSettlementInput, SETTLEMENT_EPSILON_USD,
+    settlement_billing_status_for_usage_status, settlement_provider_usage_cost_usd,
+    SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
 };
 use aether_data_contracts::DataLayerError;
 
@@ -710,7 +710,7 @@ WHERE id = $1
                                 &mut **tx,
                                 &input.request_id,
                                 provider_id,
-                                input.actual_total_cost_usd,
+                                settlement_provider_usage_cost_usd(&input),
                             )
                             .await?;
                         }
