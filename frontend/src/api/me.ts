@@ -4,7 +4,11 @@ import type { TieredPricingConfig } from './endpoints/types'
 import { cachedRequest, buildCacheKey } from '@/utils/cache'
 import type { BillingSummary } from './auth'
 import type { UserSession } from '@/types/session'
-import type { FeatureSettingsMap } from '@/utils/featureSettings'
+import type {
+  ApiKeyBillingMultiplierMode,
+  ApiKeyBillingSourceMode,
+  FeatureSettingsMap,
+} from '@/utils/featureSettings'
 
 const ACTIVITY_HEATMAP_CACHE_TTL_MS = 30 * 60 * 1000
 
@@ -181,8 +185,10 @@ export interface ApiKey {
   total_requests?: number
   total_cost_usd?: number
   billing_multiplier?: number
+  billing_multiplier_mode?: ApiKeyBillingMultiplierMode
   effective_billing_multiplier?: number
-  billing_multiplier_source?: 'plan' | 'group' | 'api_key'
+  billing_multiplier_source?: 'default' | 'group' | 'api_key'
+  billing_source?: ApiKeyBillingSourceMode
   rate_limit?: number | null
   concurrent_limit?: number | null
   ip_rules?: string[] | null

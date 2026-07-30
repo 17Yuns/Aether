@@ -35,8 +35,12 @@ pub(super) fn build_admin_user_api_key_detail_payload(
     is_locked: bool,
     billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
-    let (effective_billing_multiplier, billing_multiplier_source) =
-        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
+    let (
+        billing_multiplier_mode,
+        effective_billing_multiplier,
+        billing_multiplier_source,
+        billing_source,
+    ) = resolve_admin_user_api_key_billing_settings(record, billing_override);
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -46,8 +50,10 @@ pub(super) fn build_admin_user_api_key_detail_payload(
         "total_requests": record.total_requests,
         "total_cost_usd": record.total_cost_usd,
         "billing_multiplier": record.billing_multiplier,
+        "billing_multiplier_mode": billing_multiplier_mode.as_str(),
         "effective_billing_multiplier": effective_billing_multiplier,
         "billing_multiplier_source": billing_multiplier_source,
+        "billing_source": billing_source.as_str(),
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "ip_rules": record.ip_rules,
@@ -56,6 +62,41 @@ pub(super) fn build_admin_user_api_key_detail_payload(
         "last_used_at": format_optional_unix_secs_iso8601(record.last_used_at_unix_secs),
         "created_at": format_optional_unix_secs_iso8601(record.created_at_unix_secs),
     })
+}
+
+pub(super) fn resolve_admin_user_api_key_billing_settings(
+    record: &aether_data::repository::auth::StoredAuthApiKeyExportRecord,
+    group_override: Option<(f64, &'static str)>,
+) -> (
+    aether_data::repository::auth::ApiKeyBillingMultiplierMode,
+    f64,
+    &'static str,
+    aether_data::repository::auth::ApiKeyBillingSourceMode,
+) {
+    let multiplier_mode =
+        aether_data::repository::auth::api_key_billing_multiplier_mode_from_feature_settings(
+            record.feature_settings.as_ref(),
+        );
+    let billing_source =
+        aether_data::repository::auth::api_key_billing_source_mode_from_feature_settings(
+            record.feature_settings.as_ref(),
+        );
+    let (effective_multiplier, multiplier_source) = match multiplier_mode {
+        aether_data::repository::auth::ApiKeyBillingMultiplierMode::Inherit => group_override
+            .unwrap_or((
+                aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER,
+                "default",
+            )),
+        aether_data::repository::auth::ApiKeyBillingMultiplierMode::Custom => {
+            (record.billing_multiplier, "api_key")
+        }
+    };
+    (
+        multiplier_mode,
+        effective_multiplier,
+        multiplier_source,
+        billing_source,
+    )
 }
 
 pub(crate) fn normalize_admin_optional_api_key_name(

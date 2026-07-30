@@ -1,5 +1,8 @@
 use super::super::super::build_admin_users_bad_request_response;
-use super::super::helpers::{format_optional_unix_secs_iso8601, masked_user_api_key_display};
+use super::super::helpers::{
+    format_optional_unix_secs_iso8601, masked_user_api_key_display,
+    resolve_admin_user_api_key_billing_settings,
+};
 use super::super::paths::admin_user_id_from_api_keys_path;
 
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
@@ -58,8 +61,12 @@ pub(crate) async fn build_admin_list_user_api_keys_response(
     let api_keys = export_records
         .into_iter()
         .map(|record| {
-            let (effective_billing_multiplier, billing_multiplier_source) =
-                billing_override.unwrap_or((record.billing_multiplier, "api_key"));
+            let (
+                billing_multiplier_mode,
+                effective_billing_multiplier,
+                billing_multiplier_source,
+                billing_source,
+            ) = resolve_admin_user_api_key_billing_settings(&record, billing_override);
             let is_locked = snapshot_by_id
                 .get(&record.api_key_id)
                 .map(|snapshot| snapshot.api_key_is_locked)
@@ -73,8 +80,10 @@ pub(crate) async fn build_admin_list_user_api_keys_response(
                 "total_requests": record.total_requests,
                 "total_cost_usd": record.total_cost_usd,
                 "billing_multiplier": record.billing_multiplier,
+                "billing_multiplier_mode": billing_multiplier_mode.as_str(),
                 "effective_billing_multiplier": effective_billing_multiplier,
                 "billing_multiplier_source": billing_multiplier_source,
+                "billing_source": billing_source.as_str(),
                 "rate_limit": record.rate_limit,
                 "concurrent_limit": record.concurrent_limit,
                 "feature_settings": record.feature_settings,

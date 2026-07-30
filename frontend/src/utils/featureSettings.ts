@@ -7,6 +7,9 @@ export interface NotificationPushServiceFeatureSettings {
   enabled: boolean
 }
 
+export type ApiKeyBillingSourceMode = 'auto' | 'wallet' | 'package'
+export type ApiKeyBillingMultiplierMode = 'inherit' | 'custom'
+
 export type FeatureSettingsMap = Record<string, unknown>
 
 const DEFAULT_CHAT_PII_REDACTION_FEATURE_SETTINGS: ChatPiiRedactionFeatureSettings = {
@@ -92,4 +95,40 @@ export function mergeNotificationPushServiceFeatureSettings(
     enabled: notificationPushService.enabled,
   }
   return Object.keys(settings).length > 0 ? settings : null
+}
+
+export function readApiKeyBillingSourceMode(
+  featureSettings: unknown,
+): ApiKeyBillingSourceMode {
+  const feature = isRecord(featureSettings)
+    ? featureSettings.billing_source
+    : null
+  if (!isRecord(feature)) return 'auto'
+  return feature.mode === 'wallet' || feature.mode === 'package'
+    ? feature.mode
+    : 'auto'
+}
+
+export function mergeApiKeyBillingSourceMode(
+  featureSettings: unknown,
+  mode: ApiKeyBillingSourceMode,
+): FeatureSettingsMap | null {
+  const settings: FeatureSettingsMap = isRecord(featureSettings)
+    ? { ...featureSettings }
+    : {}
+  if (mode === 'auto') {
+    delete settings.billing_source
+  } else {
+    settings.billing_source = { mode }
+  }
+  return Object.keys(settings).length > 0 ? settings : null
+}
+
+export function readApiKeyBillingMultiplierMode(
+  featureSettings: unknown,
+): ApiKeyBillingMultiplierMode {
+  const feature = isRecord(featureSettings)
+    ? featureSettings.billing_multiplier
+    : null
+  return isRecord(feature) && feature.mode === 'inherit' ? 'inherit' : 'custom'
 }

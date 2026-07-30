@@ -1,4 +1,5 @@
 use aether_data::repository::wallet::StoredWalletSnapshot;
+use aether_data_contracts::repository::auth::ApiKeyBillingSourceMode;
 use aether_wallet::{
     WalletAccessDecision, WalletAccessFailure, WalletLimitMode, WalletSnapshot, WalletStatus,
 };
@@ -50,31 +51,45 @@ async fn resolve_wallet_auth_gate_with_cache(
             .await?
     };
 
-    let decision = match wallet.as_ref() {
+    let mut decision = match wallet.as_ref() {
         Some(wallet) => map_wallet_snapshot(wallet).access_decision(false),
         None => WalletAccessDecision::wallet_unavailable(None),
     };
-    if !auth_snapshot.api_key_is_standalone {
-        let quota = if use_cache {
-            state
-                .find_user_daily_quota_availability_for_auth(&auth_snapshot.user_id)
-                .await?
-        } else {
-            state
-                .find_user_daily_quota_availability_for_auth_uncached(&auth_snapshot.user_id)
-                .await?
-        };
-        if let Some(quota) = quota.filter(|quota| quota.has_active_daily_quota) {
-            let has_remaining_quota = quota.remaining_usd > DAILY_QUOTA_EPSILON_USD;
-            if decision.failure == Some(WalletAccessFailure::BalanceDenied) && has_remaining_quota {
-                return Ok(Some(WalletAccessDecision::allowed(Some(
-                    quota.remaining_usd,
-                ))));
-            }
-            if decision.failure.is_none() && !quota.allow_wallet_overage && !has_remaining_quota {
-                return Ok(Some(WalletAccessDecision::balance_denied(Some(0.0))));
-            }
-        }
+    if auth_snapshot.api_key_billing_multiplier <= DAILY_QUOTA_EPSILON_USD
+        && matches!(decision.failure, Some(WalletAccessFailure::BalanceDenied))
+    {
+        decision = WalletAccessDecision::allowed(decision.remaining);
+    }
+    if auth_snapshot.api_key_is_standalone
+        || auth_snapshot.api_key_billing_source_mode == ApiKeyBillingSourceMode::Wallet
+    {
+        return Ok(Some(decision));
+    }
+
+    let quota = if use_cache {
+        state
+            .find_user_daily_quota_availability_for_auth(&auth_snapshot.user_id)
+            .await?
+    } else {
+        state
+            .find_user_daily_quota_availability_for_auth_uncached(&auth_snapshot.user_id)
+            .await?
+    }
+    .filter(|quota| quota.has_active_daily_quota);
+
+    let Some(quota) = quota else {
+        return Ok(Some(match auth_snapshot.api_key_billing_source_mode {
+            ApiKeyBillingSourceMode::Package => WalletAccessDecision::balance_denied(Some(0.0)),
+            ApiKeyBillingSourceMode::Auto | ApiKeyBillingSourceMode::Wallet => decision,
+        }));
+    };
+    if quota.remaining_usd > DAILY_QUOTA_EPSILON_USD {
+        return Ok(Some(WalletAccessDecision::allowed(Some(
+            quota.remaining_usd,
+        ))));
+    }
+    if auth_snapshot.api_key_billing_source_mode == ApiKeyBillingSourceMode::Package {
+        return Ok(Some(WalletAccessDecision::balance_denied(Some(0.0))));
     }
     Ok(Some(decision))
 }
@@ -265,6 +280,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wallet_source_skips_remaining_package_quota() {
+        let state = state_with_wallet_and_quota(
+            empty_user_wallet(),
+            Some(quota_availability(10.0, 4.0, true)),
+        );
+        let mut auth_snapshot = ordinary_user_api_key_snapshot();
+        auth_snapshot.api_key_billing_source_mode =
+            aether_data::repository::auth::ApiKeyBillingSourceMode::Wallet;
+
+        let decision = resolve_wallet_auth_gate(&state, &auth_snapshot)
+            .await
+            .expect("wallet gate should resolve")
+            .expect("wallet gate should return a decision");
+
+        assert!(!decision.allowed);
+        assert_eq!(decision.failure, Some(WalletAccessFailure::BalanceDenied));
+    }
+
+    #[tokio::test]
+    async fn auto_source_falls_back_to_wallet_even_when_legacy_overage_flag_is_false() {
+        let mut wallet = empty_user_wallet();
+        wallet.balance = 10.0;
+        let state = state_with_wallet_and_quota(wallet, Some(quota_availability(10.0, 0.0, false)));
+
+        let decision = resolve_wallet_auth_gate(&state, &ordinary_user_api_key_snapshot())
+            .await
+            .expect("wallet gate should resolve")
+            .expect("wallet gate should return a decision");
+
+        assert!(decision.allowed);
+        assert_eq!(decision.failure, None);
+        assert_eq!(decision.remaining, Some(10.0));
+    }
+
+    #[tokio::test]
     async fn disabled_auth_capacity_cache_still_gates_wallet_reads() {
         let mut state = state_with_wallet_and_quota(empty_user_wallet(), None);
         let mut guard_config = (*state.frontdoor_runtime_guards).clone();
@@ -404,6 +454,8 @@ mod tests {
             api_key_id: "api-key-1".to_string(),
             api_key_name: Some("admin-created-key".to_string()),
             api_key_billing_multiplier: 1.0,
+            api_key_billing_source_mode: Default::default(),
+            api_key_billing_multiplier_mode: Default::default(),
             api_key_is_active: true,
             api_key_is_locked: false,
             api_key_is_standalone: false,

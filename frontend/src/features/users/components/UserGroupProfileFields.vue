@@ -44,7 +44,7 @@
           @update:model-value="updateBillingMultiplier"
         />
         <p class="text-xs text-muted-foreground">
-          {{ legacyT(billingMultiplier === undefined ? '未配置，继续使用 Key 自身倍率' : '套餐倍率生效时会优先覆盖此倍率') }}
+          {{ legacyT(billingMultiplier === undefined ? '未配置时，继承型 Key 使用 1x' : '继承型 Key 从钱包扣费时使用此倍率') }}
         </p>
       </div>
     </div>

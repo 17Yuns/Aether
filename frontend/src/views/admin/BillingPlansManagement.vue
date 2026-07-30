@@ -634,7 +634,7 @@
               <div>
                 <Label class="text-sm font-medium">套餐计费倍率</Label>
                 <p class="mt-1 text-xs text-muted-foreground">
-                  启用后优先于用户组和 API Key 倍率，套餐到期后自动恢复继承
+                  仅在消耗套餐额度时生效；钱包扣费使用 API Key 或用户组倍率
                 </p>
               </div>
               <Switch v-model="form.billing_multiplier_enabled" />
@@ -736,15 +736,6 @@
                   v-model="form.reset_timezone"
                   placeholder="Asia/Shanghai"
                 />
-              </div>
-              <div class="flex items-center justify-between rounded-xl border border-border/60 bg-card/50 p-3">
-                <div>
-                  <Label>允许超额扣钱包</Label>
-                  <p class="mt-1 text-xs text-muted-foreground">
-                    额度不足时继续使用钱包余额
-                  </p>
-                </div>
-                <Switch v-model="form.allow_wallet_overage" />
               </div>
               <div class="flex items-center justify-between rounded-xl border border-border/60 bg-card/50 p-3 opacity-70">
                 <div>
@@ -912,7 +903,6 @@ interface PlanFormState {
   daily_quota_usd: number
   reset_timezone: string
   carry_over: boolean
-  allow_wallet_overage: boolean
   membership_group_enabled: boolean
   grant_user_groups: string[]
 }
@@ -1126,9 +1116,7 @@ const dailyQuotaSummaryText = computed(() =>
 )
 
 const dailyQuotaDetailText = computed(() =>
-  form.allow_wallet_overage
-    ? '每日额度不足时会继续使用钱包余额，适合希望用户不中断请求的套餐。'
-    : '每日额度不足时不再继续扣钱包，适合严格封顶的月卡或体验卡。'
+  'API Key 使用自动扣费时优先消耗每日额度，耗尽后切换钱包；仅套餐模式会严格限制在套餐额度内。'
 )
 
 const membershipSummaryText = computed(() =>
@@ -1168,7 +1156,6 @@ function buildDefaultForm(): PlanFormState {
     daily_quota_usd: 50,
     reset_timezone: 'Asia/Shanghai',
     carry_over: false,
-    allow_wallet_overage: false,
     membership_group_enabled: false,
     grant_user_groups: [],
   }
@@ -1245,7 +1232,6 @@ function formFromPlan(plan: BillingPlan): PlanFormState {
       next.daily_quota_usd = Number(quota.daily_quota_usd || next.daily_quota_usd)
       next.reset_timezone = quota.reset_timezone || 'Asia/Shanghai'
       next.carry_over = Boolean(quota.carry_over)
-      next.allow_wallet_overage = Boolean(quota.allow_wallet_overage)
     } else if (entitlement.type === 'membership_group') {
       const membership = entitlement as MembershipGroupEntitlement
       next.membership_group_enabled = true
@@ -1302,7 +1288,7 @@ function buildEntitlements(): BillingEntitlement[] {
       daily_quota_usd: Number(form.daily_quota_usd),
       reset_timezone: form.reset_timezone.trim() || 'Asia/Shanghai',
       carry_over: false,
-      allow_wallet_overage: Boolean(form.allow_wallet_overage),
+      allow_wallet_overage: true,
     })
   }
   if (form.membership_group_enabled) {

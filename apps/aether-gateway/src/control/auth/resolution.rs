@@ -79,6 +79,8 @@ pub(crate) struct GatewayControlAuthContext {
     pub(crate) api_key_name: Option<String>,
     #[serde(default = "default_api_key_billing_multiplier")]
     pub(crate) api_key_billing_multiplier: f64,
+    #[serde(default)]
+    pub(crate) api_key_billing_source_mode: aether_data::repository::auth::ApiKeyBillingSourceMode,
     pub(crate) balance_remaining: Option<f64>,
     pub(crate) access_allowed: bool,
     #[serde(skip)]
@@ -925,6 +927,8 @@ pub(super) async fn resolve_data_backed_auth_context(
                     username: None,
                     api_key_name: None,
                     api_key_billing_multiplier: default_api_key_billing_multiplier(),
+                    api_key_billing_source_mode:
+                        aether_data::repository::auth::ApiKeyBillingSourceMode::Auto,
                     balance_remaining: None,
                     access_allowed: false,
                     user_rate_limit: None,
@@ -1039,6 +1043,8 @@ async fn resolve_antigravity_bearer_bridge_auth_context(
             username: None,
             api_key_name: None,
             api_key_billing_multiplier: default_api_key_billing_multiplier(),
+            api_key_billing_source_mode:
+                aether_data::repository::auth::ApiKeyBillingSourceMode::Auto,
             balance_remaining: None,
             access_allowed: false,
             user_rate_limit: None,
@@ -1099,6 +1105,8 @@ async fn resolve_trusted_auth_context(
             username: None,
             api_key_name: None,
             api_key_billing_multiplier: default_api_key_billing_multiplier(),
+            api_key_billing_source_mode:
+                aether_data::repository::auth::ApiKeyBillingSourceMode::Auto,
             balance_remaining: trusted_headers.balance_remaining,
             access_allowed: false,
             user_rate_limit: None,
@@ -1195,6 +1203,7 @@ async fn build_data_backed_auth_context(
         username: Some(snapshot.username.clone()),
         api_key_name: snapshot.api_key_name.clone(),
         api_key_billing_multiplier: snapshot.api_key_billing_multiplier,
+        api_key_billing_source_mode: snapshot.api_key_billing_source_mode,
         user_id: snapshot.user_id,
         api_key_id: snapshot.api_key_id,
         balance_remaining: wallet_remaining.or(balance_remaining),

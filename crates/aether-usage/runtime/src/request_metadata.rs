@@ -131,6 +131,7 @@ pub(crate) fn retain_first_byte_request_metadata(value: Option<Value>) -> Option
                 | "client_session_affinity"
                 | "api_key_is_standalone"
                 | "api_key_billing_multiplier"
+                | "api_key_billing_source"
                 | "request_path"
                 | "request_query_string"
                 | "request_path_and_query"
@@ -349,6 +350,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_non_null_value(source, target, "client_session_affinity");
     copy_bool(source, target, "api_key_is_standalone");
     copy_number(source, target, "api_key_billing_multiplier");
+    copy_non_empty_string(source, target, "api_key_billing_source");
     copy_non_empty_string(source, target, "request_path");
     copy_non_empty_string(source, target, "request_query_string");
     copy_non_empty_string(source, target, "request_path_and_query");
@@ -403,6 +405,7 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_non_null_value(&mut source, target, "client_session_affinity");
     remove_bool(&mut source, target, "api_key_is_standalone");
     remove_number(&mut source, target, "api_key_billing_multiplier");
+    remove_non_empty_string(&mut source, target, "api_key_billing_source");
     remove_non_empty_string(&mut source, target, "request_path");
     remove_non_empty_string(&mut source, target, "request_query_string");
     remove_non_empty_string(&mut source, target, "request_path_and_query");

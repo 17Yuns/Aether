@@ -75,6 +75,7 @@ impl LocalVideoTaskPersistence {
                 .get("api_key_billing_multiplier")
                 .and_then(Value::as_f64)
                 .filter(|value| value.is_finite()),
+            api_key_billing_source: context_text(report_context, "api_key_billing_source"),
             client_api_format: context_text(report_context, "client_api_format")
                 .unwrap_or_else(|| plan.client_api_format.clone()),
             provider_api_format: context_text(report_context, "provider_api_format")
@@ -106,6 +107,14 @@ impl LocalVideoTaskPersistence {
                 .and_then(|value| value.get("api_key_billing_multiplier"))
                 .and_then(Value::as_f64)
                 .filter(|value| value.is_finite()),
+            api_key_billing_source: task
+                .request_metadata
+                .as_ref()
+                .and_then(|value| value.get("api_key_billing_source"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
             client_api_format,
             provider_api_format,
             original_request_body: task

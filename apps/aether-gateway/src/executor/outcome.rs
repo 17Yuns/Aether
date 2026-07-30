@@ -54,6 +54,7 @@ pub(crate) struct LocalExecutionRuntimeMissContext {
     pub(crate) auth_username: Option<String>,
     pub(crate) auth_api_key_name: Option<String>,
     pub(crate) auth_api_key_billing_multiplier: Option<f64>,
+    pub(crate) auth_api_key_billing_source: Option<String>,
     candidate_contexts: Vec<RuntimeMissCandidateContext>,
 }
 
@@ -254,6 +255,8 @@ pub(crate) async fn build_local_execution_runtime_miss_context(
         auth_username: auth_context.and_then(|value| value.username.clone()),
         auth_api_key_name: auth_context.and_then(|value| value.api_key_name.clone()),
         auth_api_key_billing_multiplier: auth_context.map(|value| value.api_key_billing_multiplier),
+        auth_api_key_billing_source: auth_context
+            .map(|value| value.api_key_billing_source_mode.as_str().to_string()),
         candidate_contexts: load_runtime_miss_candidate_contexts_with_retry(
             state, request_id, decision,
         )
@@ -272,6 +275,8 @@ pub(crate) fn build_fast_local_execution_runtime_miss_context(
         auth_username: auth_context.and_then(|value| value.username.clone()),
         auth_api_key_name: auth_context.and_then(|value| value.api_key_name.clone()),
         auth_api_key_billing_multiplier: auth_context.map(|value| value.api_key_billing_multiplier),
+        auth_api_key_billing_source: auth_context
+            .map(|value| value.api_key_billing_source_mode.as_str().to_string()),
         candidate_contexts: Vec::new(),
     }
 }
@@ -431,6 +436,12 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
         "trace_id".to_string(),
         Value::String(request_id.to_string()),
     );
+    if let Some(source) = context.auth_api_key_billing_source.as_ref() {
+        request_metadata.insert(
+            "api_key_billing_source".to_string(),
+            Value::String(source.clone()),
+        );
+    }
     let mut data = UsageEventData {
         user_id: context.auth_user_id.clone(),
         api_key_id: context.auth_api_key_id.clone(),

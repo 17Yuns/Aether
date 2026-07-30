@@ -250,6 +250,7 @@ mod tests {
                 username: None,
                 api_key_name: None,
                 api_key_billing_multiplier: 1.0,
+                api_key_billing_source: "auto".to_string(),
                 balance_remaining: None,
                 access_allowed: true,
                 api_key_is_standalone: false,

@@ -7179,9 +7179,14 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
     assert_eq!(create_payload["rate_limit"], 120);
     assert_eq!(create_payload["concurrent_limit"], serde_json::Value::Null);
     assert_eq!(create_payload["billing_multiplier"], 1.0);
+    assert_eq!(create_payload["billing_multiplier_mode"], "inherit");
     assert_eq!(create_payload["effective_billing_multiplier"], 0.75);
     assert_eq!(create_payload["billing_multiplier_source"], "group");
-    assert_eq!(create_payload["feature_settings"], serde_json::Value::Null);
+    assert_eq!(create_payload["billing_source"], "auto");
+    assert_eq!(
+        create_payload["feature_settings"]["billing_multiplier"]["mode"],
+        "inherit"
+    );
     assert_eq!(create_payload["message"], "API密钥创建成功");
     let created_at = create_payload["created_at"]
         .as_str()
@@ -7205,6 +7210,12 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
             "feature_settings": {
                 "chat_pii_redaction": {
                     "enabled": true
+                },
+                "billing_multiplier": {
+                    "mode": "custom"
+                },
+                "billing_source": {
+                    "mode": "package"
                 }
             }
         }))
@@ -7220,8 +7231,14 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
     assert_eq!(update_payload["rate_limit"], 30);
     assert_eq!(update_payload["concurrent_limit"], 4);
     assert_eq!(update_payload["billing_multiplier"], 1.0);
+    assert_eq!(update_payload["billing_multiplier_mode"], "inherit");
     assert_eq!(update_payload["effective_billing_multiplier"], 0.75);
     assert_eq!(update_payload["billing_multiplier_source"], "group");
+    assert_eq!(update_payload["billing_source"], "package");
+    assert_eq!(
+        update_payload["feature_settings"]["billing_multiplier"]["mode"],
+        "inherit"
+    );
     assert_eq!(
         update_payload["feature_settings"]["chat_pii_redaction"]["enabled"],
         true
@@ -7305,8 +7322,10 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
     );
     assert_eq!(detail_payload["concurrent_limit"], 4);
     assert_eq!(detail_payload["billing_multiplier"], 1.0);
+    assert_eq!(detail_payload["billing_multiplier_mode"], "inherit");
     assert_eq!(detail_payload["effective_billing_multiplier"], 0.75);
     assert_eq!(detail_payload["billing_multiplier_source"], "group");
+    assert_eq!(detail_payload["billing_source"], "package");
     assert_eq!(detail_payload["force_capabilities"], json!({}));
     assert_eq!(detail_payload["created_at"], created_at);
     assert_eq!(

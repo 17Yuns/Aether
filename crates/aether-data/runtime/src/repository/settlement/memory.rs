@@ -4,8 +4,9 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
 use super::{
-    plan_finite_wallet_debit, settlement_billable_cost_usd,
+    plan_finite_wallet_debit, plan_source_aware_settlement, settlement_billable_cost_usd,
     settlement_billing_status_for_usage_status, settlement_provider_usage_cost_usd,
+    source_aware_settlement_cost_usd, source_aware_wallet_billing_multiplier,
     SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
 };
 use crate::repository::wallet::{InMemoryWalletRepository, StoredWalletSnapshot};
@@ -105,7 +106,33 @@ impl SettlementWriteRepository for InMemorySettlementRepository {
 
         let mut final_billing_status =
             settlement_billing_status_for_usage_status(&input.status).to_string();
-        let billable_cost_usd = settlement_billable_cost_usd(&input);
+        let source_mode = input.billing_source_mode.map(|mode| {
+            if input.api_key_is_standalone {
+                crate::repository::auth::ApiKeyBillingSourceMode::Wallet
+            } else {
+                mode
+            }
+        });
+        let provider_cost_usd = source_aware_settlement_cost_usd(&input);
+        let source_aware_plan = source_mode
+            .map(|mode| {
+                plan_source_aware_settlement(
+                    provider_cost_usd,
+                    source_aware_wallet_billing_multiplier(&input),
+                    mode,
+                    &[],
+                    None,
+                    true,
+                )
+            })
+            .transpose()?;
+        let billable_cost_usd = source_aware_plan
+            .as_ref()
+            .map(|plan| plan.wallet_debit_usd)
+            .unwrap_or_else(|| settlement_billable_cost_usd(&input));
+        let package_source_is_insufficient = source_aware_plan
+            .as_ref()
+            .is_some_and(|plan| plan.insufficient);
         let provider_usage_cost_usd = settlement_provider_usage_cost_usd(&input);
         let mut settlement = self.wallets.with_mut(|wallets| {
             let wallet_id = input
@@ -146,7 +173,10 @@ impl SettlementWriteRepository for InMemorySettlementRepository {
                 finalized_at_unix_secs: input.finalized_at_unix_secs,
             };
 
-            if let Some(wallet) = wallet {
+            if final_billing_status == "settled" && package_source_is_insufficient {
+                final_billing_status = "insufficient_quota".to_string();
+                settlement.billing_status = final_billing_status.clone();
+            } else if let Some(wallet) = wallet {
                 let before_recharge = wallet.balance;
                 let before_gift = wallet.gift_balance;
                 let before_total = before_recharge + before_gift;
@@ -207,6 +237,7 @@ impl SettlementWriteRepository for InMemorySettlementRepository {
 #[cfg(test)]
 mod tests {
     use super::InMemorySettlementRepository;
+    use crate::repository::auth::ApiKeyBillingSourceMode;
     use crate::repository::settlement::{SettlementWriteRepository, UsageSettlementInput};
     use crate::repository::wallet::StoredWalletSnapshot;
 
@@ -263,6 +294,8 @@ mod tests {
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
                 provider_actual_total_cost_usd: Some(2.5),
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -291,6 +324,8 @@ mod tests {
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -300,6 +335,34 @@ mod tests {
         assert_eq!(settlement.wallet_id.as_deref(), Some("wallet-user-1"));
         assert_eq!(settlement.wallet_balance_before, Some(12.0));
         assert_eq!(settlement.wallet_balance_after, Some(6.0));
+    }
+
+    #[tokio::test]
+    async fn source_aware_wallet_settlement_applies_wallet_multiplier() {
+        let repository = InMemorySettlementRepository::seed(vec![sample_wallet()]);
+        let settlement = repository
+            .settle_usage(UsageSettlementInput {
+                request_id: "req-source-aware-wallet".to_string(),
+                user_id: Some("user-1".to_string()),
+                api_key_id: Some("key-1".to_string()),
+                api_key_is_standalone: false,
+                provider_id: None,
+                status: "completed".to_string(),
+                billing_status: "pending".to_string(),
+                total_cost_usd: 2.0,
+                actual_total_cost_usd: 3.0,
+                provider_actual_total_cost_usd: Some(2.0),
+                billing_source_mode: Some(ApiKeyBillingSourceMode::Wallet),
+                wallet_billing_multiplier: Some(1.5),
+                finalized_at_unix_secs: Some(200),
+            })
+            .await
+            .expect("settlement should succeed")
+            .expect("settlement should exist");
+
+        assert_eq!(settlement.billing_status, "settled");
+        assert_eq!(settlement.wallet_balance_before, Some(12.0));
+        assert_eq!(settlement.wallet_balance_after, Some(9.0));
     }
 
     #[tokio::test]
@@ -317,6 +380,8 @@ mod tests {
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 6.0,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -347,6 +412,8 @@ mod tests {
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 1.5,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -374,6 +441,8 @@ mod tests {
                 total_cost_usd: 3.0,
                 actual_total_cost_usd: 15.0,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(200),
             })
             .await
@@ -403,6 +472,8 @@ mod tests {
                 total_cost_usd: 2.0,
                 actual_total_cost_usd: 1.0,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(250),
             })
             .await
@@ -421,6 +492,8 @@ mod tests {
                 total_cost_usd: 2.0,
                 actual_total_cost_usd: 1.0,
                 provider_actual_total_cost_usd: None,
+                billing_source_mode: None,
+                wallet_billing_multiplier: None,
                 finalized_at_unix_secs: Some(250),
             })
             .await

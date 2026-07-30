@@ -178,6 +178,10 @@ pub(crate) fn build_execution_runtime_auth_context(
         username: auth_context.username.clone(),
         api_key_name: auth_context.api_key_name.clone(),
         api_key_billing_multiplier: auth_context.api_key_billing_multiplier,
+        api_key_billing_source: auth_context
+            .api_key_billing_source_mode
+            .as_str()
+            .to_string(),
         balance_remaining: auth_context.balance_remaining,
         access_allowed: auth_context.access_allowed,
         api_key_is_standalone: auth_context.api_key_is_standalone,

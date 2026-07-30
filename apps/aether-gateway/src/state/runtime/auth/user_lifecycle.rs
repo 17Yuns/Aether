@@ -937,6 +937,7 @@ mod tests {
             username: Some("alice".to_string()),
             api_key_name: Some("default".to_string()),
             api_key_billing_multiplier: 1.0,
+            api_key_billing_source_mode: Default::default(),
             balance_remaining: None,
             access_allowed: true,
             user_rate_limit: None,

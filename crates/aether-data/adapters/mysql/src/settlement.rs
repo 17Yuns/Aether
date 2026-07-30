@@ -1,10 +1,16 @@
 use async_trait::async_trait;
 use sqlx::{mysql::MySqlRow, Row};
 
+use aether_data_contracts::repository::auth::{
+    normalize_api_key_billing_multiplier, ApiKeyBillingSourceMode,
+    DEFAULT_API_KEY_BILLING_MULTIPLIER,
+};
 use aether_data_contracts::repository::settlement::{
-    finite_wallet_available_usd, plan_finite_wallet_debit, settlement_billable_cost_usd,
-    settlement_billing_status_for_usage_status, settlement_provider_usage_cost_usd,
-    SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
+    finite_wallet_available_usd, plan_finite_wallet_debit, plan_source_aware_settlement,
+    settlement_billable_cost_usd, settlement_billing_status_for_usage_status,
+    settlement_provider_usage_cost_usd, source_aware_settlement_cost_usd,
+    source_aware_wallet_billing_multiplier, DailyQuotaBillingCapacity, SettlementWriteRepository,
+    StoredUsageSettlement, UsageSettlementInput, SETTLEMENT_EPSILON_USD,
 };
 use aether_data_contracts::DataLayerError;
 
@@ -62,6 +68,7 @@ const UPSERT_USAGE_SETTLEMENT_SNAPSHOT_SQL: &str = r#"
 INSERT INTO usage_settlement_snapshots (
   request_id,
   billing_status,
+  billing_actual_total_cost_usd,
   wallet_id,
   wallet_balance_before,
   wallet_balance_after,
@@ -73,9 +80,13 @@ INSERT INTO usage_settlement_snapshots (
   finalized_at,
   created_at,
   updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   billing_status = VALUES(billing_status),
+  billing_actual_total_cost_usd = COALESCE(
+    VALUES(billing_actual_total_cost_usd),
+    billing_actual_total_cost_usd
+  ),
   wallet_id = COALESCE(VALUES(wallet_id), wallet_id),
   wallet_balance_before = COALESCE(VALUES(wallet_balance_before), wallet_balance_before),
   wallet_balance_after = COALESCE(VALUES(wallet_balance_after), wallet_balance_after),
@@ -178,6 +189,8 @@ async fn enqueue_provider_monthly_usage_delta_mysql(
 #[derive(Debug, Default)]
 struct DailyQuotaDebitResult {
     debited_usd: f64,
+    wallet_debit_usd: Option<f64>,
+    total_billed_cost_usd: Option<f64>,
     insufficient: bool,
 }
 
@@ -187,6 +200,7 @@ struct DailyQuotaGrant {
     daily_quota_usd: f64,
     usage_date: String,
     allow_wallet_overage: bool,
+    billing_multiplier: f64,
 }
 
 fn daily_quota_usage_date(
@@ -211,6 +225,16 @@ fn daily_quota_grants_from_entitlement(
     let Some(items) = entitlements.as_array() else {
         return Ok(grants);
     };
+    let billing_multiplier = items
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("billing_multiplier")
+        })
+        .and_then(|item| item.get("multiplier"))
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| normalize_api_key_billing_multiplier(Some(value)))
+        .transpose()?
+        .unwrap_or(DEFAULT_API_KEY_BILLING_MULTIPLIER);
     for item in items {
         if item.get("type").and_then(serde_json::Value::as_str) != Some("daily_quota") {
             continue;
@@ -234,6 +258,7 @@ fn daily_quota_grants_from_entitlement(
                 .get("allow_wallet_overage")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
+            billing_multiplier,
         });
     }
     Ok(grants)
@@ -244,11 +269,13 @@ async fn consume_daily_quota_mysql(
     user_id: &str,
     request_id: &str,
     total_cost_usd: f64,
+    billing_source_mode: Option<ApiKeyBillingSourceMode>,
+    wallet_billing_multiplier: f64,
     wallet_available_usd: Option<f64>,
     wallet_can_overdraft: bool,
     now_unix_secs: i64,
 ) -> Result<DailyQuotaDebitResult, DataLayerError> {
-    if total_cost_usd <= 0.0 {
+    if total_cost_usd <= 0.0 && billing_source_mode.is_none() {
         return Ok(DailyQuotaDebitResult::default());
     }
     let rows = sqlx::query(
@@ -286,7 +313,7 @@ FOR UPDATE
             now,
         )?);
     }
-    if grants.is_empty() {
+    if grants.is_empty() && billing_source_mode.is_none() {
         return Ok(DailyQuotaDebitResult::default());
     }
 
@@ -312,9 +339,73 @@ WHERE user_entitlement_id = ?
         total_remaining += remaining;
         grants_with_remaining.push((grant, remaining));
     }
+    if let Some(billing_source_mode) = billing_source_mode {
+        let capacities = grants_with_remaining
+            .iter()
+            .map(|(grant, remaining)| DailyQuotaBillingCapacity {
+                remaining_usd: *remaining,
+                billing_multiplier: grant.billing_multiplier,
+            })
+            .collect::<Vec<_>>();
+        let plan = plan_source_aware_settlement(
+            total_cost_usd,
+            wallet_billing_multiplier,
+            billing_source_mode,
+            &capacities,
+            wallet_available_usd,
+            wallet_can_overdraft,
+        )?;
+        if plan.insufficient {
+            return Ok(DailyQuotaDebitResult {
+                debited_usd: 0.0,
+                wallet_debit_usd: Some(0.0),
+                total_billed_cost_usd: None,
+                insufficient: true,
+            });
+        }
+
+        for ((grant, balance_before), amount) in grants_with_remaining
+            .into_iter()
+            .zip(plan.quota_debits_usd.iter().copied())
+        {
+            if amount <= SETTLEMENT_EPSILON_USD {
+                continue;
+            }
+            let balance_after = (balance_before - amount).max(0.0);
+            sqlx::query(
+                r#"
+INSERT IGNORE INTO entitlement_usage_ledgers (
+  id, user_entitlement_id, user_id, request_id, amount_usd,
+  balance_before, balance_after, usage_date, created_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#,
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&grant.entitlement_id)
+            .bind(user_id)
+            .bind(request_id)
+            .bind(amount)
+            .bind(balance_before)
+            .bind(balance_after)
+            .bind(&grant.usage_date)
+            .bind(now_unix_secs)
+            .execute(&mut **tx)
+            .await
+            .map_sql_err()?;
+        }
+        return Ok(DailyQuotaDebitResult {
+            debited_usd: plan.package_billed_cost_usd,
+            wallet_debit_usd: Some(plan.wallet_debit_usd),
+            total_billed_cost_usd: Some(plan.total_billed_cost_usd),
+            insufficient: false,
+        });
+    }
     if !allow_wallet_overage && total_remaining + 0.000_000_01 < total_cost_usd {
         return Ok(DailyQuotaDebitResult {
             debited_usd: 0.0,
+            wallet_debit_usd: None,
+            total_billed_cost_usd: None,
             insufficient: true,
         });
     }
@@ -326,6 +417,8 @@ WHERE user_entitlement_id = ?
     {
         return Ok(DailyQuotaDebitResult {
             debited_usd: 0.0,
+            wallet_debit_usd: None,
+            total_billed_cost_usd: None,
             insufficient: true,
         });
     }
@@ -364,6 +457,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     }
     Ok(DailyQuotaDebitResult {
         debited_usd: debited,
+        wallet_debit_usd: None,
+        total_billed_cost_usd: None,
         insufficient: false,
     })
 }
@@ -420,6 +515,7 @@ impl SettlementWriteRepository for MysqlSettlementRepository {
             provider_monthly_used_usd: None,
             finalized_at_unix_secs: Some(finalized_at as u64),
         };
+        let mut settled_billed_cost_usd = None;
 
         if final_billing_status == "settled" {
             let api_key_id = input
@@ -517,36 +613,82 @@ FOR UPDATE
                 settlement.wallet_gift_balance_after = Some(before_gift);
             }
 
-            let billable_cost_usd = settlement_billable_cost_usd(&input);
-            let wallet_debit_cost_usd = if !api_key_is_standalone {
+            let billing_source_mode = input.billing_source_mode.map(|mode| {
+                if api_key_is_standalone {
+                    ApiKeyBillingSourceMode::Wallet
+                } else {
+                    mode
+                }
+            });
+            let billable_cost_usd = billing_source_mode
+                .map(|_| source_aware_settlement_cost_usd(&input))
+                .unwrap_or_else(|| settlement_billable_cost_usd(&input));
+            let wallet_billing_multiplier = source_aware_wallet_billing_multiplier(&input);
+            let quota = if !api_key_is_standalone {
                 if let Some(user_id) = input.user_id.as_deref().filter(|value| !value.is_empty()) {
-                    let quota = consume_daily_quota_mysql(
+                    consume_daily_quota_mysql(
                         &mut tx,
                         user_id,
                         &input.request_id,
                         billable_cost_usd,
+                        billing_source_mode,
+                        wallet_billing_multiplier,
                         wallet_available_usd,
                         wallet_can_overdraft,
                         updated_at,
                     )
-                    .await?;
-                    if quota.insufficient {
-                        final_billing_status = "insufficient_quota".to_string();
-                        settlement.billing_status = final_billing_status.clone();
-                        0.0
-                    } else {
-                        (billable_cost_usd - quota.debited_usd).max(0.0)
+                    .await?
+                } else if let Some(source_mode) = billing_source_mode {
+                    let plan = plan_source_aware_settlement(
+                        billable_cost_usd,
+                        wallet_billing_multiplier,
+                        source_mode,
+                        &[],
+                        wallet_available_usd,
+                        wallet_can_overdraft,
+                    )?;
+                    DailyQuotaDebitResult {
+                        debited_usd: 0.0,
+                        wallet_debit_usd: Some(plan.wallet_debit_usd),
+                        total_billed_cost_usd: Some(plan.total_billed_cost_usd),
+                        insufficient: plan.insufficient,
                     }
                 } else {
-                    billable_cost_usd
+                    DailyQuotaDebitResult::default()
+                }
+            } else if let Some(source_mode) = billing_source_mode {
+                let plan = plan_source_aware_settlement(
+                    billable_cost_usd,
+                    wallet_billing_multiplier,
+                    source_mode,
+                    &[],
+                    wallet_available_usd,
+                    wallet_can_overdraft,
+                )?;
+                DailyQuotaDebitResult {
+                    debited_usd: 0.0,
+                    wallet_debit_usd: Some(plan.wallet_debit_usd),
+                    total_billed_cost_usd: Some(plan.total_billed_cost_usd),
+                    insufficient: plan.insufficient,
                 }
             } else {
-                billable_cost_usd
+                DailyQuotaDebitResult::default()
+            };
+            let wallet_debit_cost_usd = if quota.insufficient {
+                final_billing_status = "insufficient_quota".to_string();
+                settlement.billing_status = final_billing_status.clone();
+                0.0
+            } else {
+                settled_billed_cost_usd = quota.total_billed_cost_usd;
+                quota
+                    .wallet_debit_usd
+                    .unwrap_or_else(|| (billable_cost_usd - quota.debited_usd).max(0.0))
             };
             if final_billing_status != "settled" {
                 sqlx::query(UPSERT_USAGE_SETTLEMENT_SNAPSHOT_SQL)
                     .bind(&settlement.request_id)
                     .bind(&settlement.billing_status)
+                    .bind(None::<f64>)
                     .bind(settlement.wallet_id.as_deref())
                     .bind(settlement.wallet_balance_before)
                     .bind(settlement.wallet_balance_after)
@@ -629,6 +771,7 @@ WHERE id = ?
                 sqlx::query(UPSERT_USAGE_SETTLEMENT_SNAPSHOT_SQL)
                     .bind(&settlement.request_id)
                     .bind(&settlement.billing_status)
+                    .bind(None::<f64>)
                     .bind(settlement.wallet_id.as_deref())
                     .bind(settlement.wallet_balance_before)
                     .bind(settlement.wallet_balance_after)
@@ -673,6 +816,7 @@ WHERE id = ?
         sqlx::query(UPSERT_USAGE_SETTLEMENT_SNAPSHOT_SQL)
             .bind(&settlement.request_id)
             .bind(&settlement.billing_status)
+            .bind(settled_billed_cost_usd)
             .bind(settlement.wallet_id.as_deref())
             .bind(settlement.wallet_balance_before)
             .bind(settlement.wallet_balance_after)
@@ -787,6 +931,8 @@ VALUES (
             total_cost_usd: 3.0,
             actual_total_cost_usd: 6.0,
             provider_actual_total_cost_usd: Some(2.5),
+            billing_source_mode: None,
+            wallet_billing_multiplier: None,
             finalized_at_unix_secs: Some(1_234),
         };
         let first = repository

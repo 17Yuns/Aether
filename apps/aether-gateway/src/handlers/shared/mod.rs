@@ -42,6 +42,8 @@ pub(crate) use self::normalize::{
     ip_rule_pattern_matches, ip_rules_allow, json_ip_rules_allow, normalize_feature_settings,
     normalize_ip_rules, normalize_json_array, normalize_json_object, normalize_string_list,
     normalize_user_self_feature_settings_update, parse_json_ip_rules,
+    preserve_api_key_billing_multiplier_setting, set_api_key_billing_multiplier_mode,
+    set_api_key_billing_source_mode,
 };
 pub(crate) use self::payloads::{
     attach_tunnel_heartbeat_cursor, InternalGatewayAuthContextRequest,

@@ -68,6 +68,10 @@ pub fn build_ai_execution_report_context(parts: AiExecutionReportContextParts<'_
         Value::from(parts.auth_context.api_key_billing_multiplier),
     );
     object.insert(
+        "api_key_billing_source".to_string(),
+        Value::String(parts.auth_context.api_key_billing_source.clone()),
+    );
+    object.insert(
         "username".to_string(),
         parts
             .auth_context
@@ -271,6 +275,7 @@ mod tests {
             username: Some("alice".to_string()),
             api_key_name: Some("primary".to_string()),
             api_key_billing_multiplier: 1.75,
+            api_key_billing_source: "auto".to_string(),
             balance_remaining: Some(42.0),
             access_allowed: true,
             api_key_is_standalone: false,

@@ -29,6 +29,11 @@ pub(super) struct AdminCreateUserApiKeyRequest {
     #[serde(default)]
     pub(super) billing_multiplier: Option<f64>,
     #[serde(default)]
+    pub(super) billing_multiplier_mode:
+        Option<aether_data::repository::auth::ApiKeyBillingMultiplierMode>,
+    #[serde(default)]
+    pub(super) billing_source: Option<aether_data::repository::auth::ApiKeyBillingSourceMode>,
+    #[serde(default)]
     pub(super) expire_days: Option<i32>,
     #[serde(default)]
     pub(super) expires_at: Option<String>,
@@ -54,6 +59,11 @@ pub(super) struct AdminUpdateUserApiKeyRequest {
     pub(super) concurrent_limit: Option<i32>,
     #[serde(default)]
     pub(super) billing_multiplier: Option<f64>,
+    #[serde(default)]
+    pub(super) billing_multiplier_mode:
+        Option<aether_data::repository::auth::ApiKeyBillingMultiplierMode>,
+    #[serde(default)]
+    pub(super) billing_source: Option<aether_data::repository::auth::ApiKeyBillingSourceMode>,
     #[serde(default)]
     pub(super) feature_settings: Option<Option<Value>>,
     #[serde(

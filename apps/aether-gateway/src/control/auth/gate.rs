@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use axum::http::Uri;
 
 use super::super::GatewayControlDecision;
-use super::credentials::{contains_string, extract_requested_model};
+use super::credentials::{contains_string, current_unix_secs, extract_requested_model};
 use super::GatewayControlAuthContext;
 use crate::stage_metrics::observe_gateway_stage_ms;
 use crate::{AppState, GatewayError};
@@ -130,35 +130,27 @@ async fn execution_plan_balance_capacity_rejection_inner(
         validate_execution_plan_pricing_configuration_for_plan(state, plan, report_context).await?;
         return Ok(None);
     }
-    let billing_multiplier = aether_data::repository::auth::normalize_api_key_billing_multiplier(
-        Some(auth_context.api_key_billing_multiplier),
-    )
-    .map_err(|err| GatewayError::Internal(err.to_string()))?;
-    let Some(available_usd) = available_balance_capacity_usd(state, auth_context).await? else {
+    let Some(available_provider_cost_usd) =
+        available_provider_cost_capacity_usd(state, auth_context).await?
+    else {
         validate_execution_plan_pricing_configuration_for_plan(state, plan, report_context).await?;
         return Ok(None);
     };
     let estimated_settlement_cost_usd =
         estimate_execution_plan_cost_upper_bound_usd(state, plan, report_context).await?;
-    let estimated_billed_cost_usd = if billing_multiplier == 0.0 {
-        Some(0.0)
-    } else {
-        estimated_settlement_cost_usd
-            .map(|value| aether_billing::quantize_cost(value * billing_multiplier))
-    };
-    match estimated_billed_cost_usd {
+    match estimated_settlement_cost_usd {
         Some(estimated_cost_usd)
-            if estimated_cost_usd <= available_usd + DAILY_QUOTA_EPSILON_USD =>
+            if estimated_cost_usd <= available_provider_cost_usd + DAILY_QUOTA_EPSILON_USD =>
         {
             Ok(None)
         }
-        Some(_) | None if available_usd <= DAILY_QUOTA_EPSILON_USD => {
+        Some(_) | None if available_provider_cost_usd <= DAILY_QUOTA_EPSILON_USD => {
             Ok(Some(GatewayLocalAuthRejection::BalanceDenied {
                 remaining: Some(0.0),
             }))
         }
         Some(_) => Ok(Some(GatewayLocalAuthRejection::BalanceDenied {
-            remaining: Some(available_usd),
+            remaining: Some(available_provider_cost_usd),
         })),
         None => Ok(None),
     }
@@ -185,10 +177,12 @@ async fn validate_execution_plan_pricing_configuration_for_plan(
     .await
 }
 
-async fn available_balance_capacity_usd(
+async fn available_provider_cost_capacity_usd(
     state: &AppState,
     auth_context: &GatewayControlAuthContext,
 ) -> Result<Option<f64>, GatewayError> {
+    use aether_data::repository::auth::ApiKeyBillingSourceMode;
+
     let quota_started_at = std::time::Instant::now();
     let quota_result = state
         .find_user_daily_quota_availability_for_auth(&auth_context.user_id)
@@ -212,28 +206,76 @@ async fn available_balance_capacity_usd(
         wallet_started_at.elapsed().as_millis() as u64,
     );
     let wallet = wallet_result?;
-    let wallet_available_usd = wallet.as_ref().and_then(wallet_finite_available_usd);
-    let wallet_is_unlimited = wallet
-        .as_ref()
-        .is_some_and(|wallet| wallet.limit_mode.eq_ignore_ascii_case("unlimited"));
-    Ok(match quota.as_ref() {
-        Some(quota) if !quota.allow_wallet_overage => Some(quota.remaining_usd.max(0.0)),
-        Some(_) if wallet_is_unlimited => None,
-        Some(quota) => Some(quota.remaining_usd.max(0.0) + wallet_available_usd.unwrap_or(0.0)),
-        None if wallet_is_unlimited => None,
-        None => wallet_available_usd,
+
+    let wallet_multiplier = aether_data::repository::auth::normalize_api_key_billing_multiplier(
+        Some(auth_context.api_key_billing_multiplier),
+    )
+    .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let wallet_capacity = wallet_provider_cost_capacity(wallet.as_ref(), wallet_multiplier);
+
+    let package_capacity = if let Some(quota) = quota.as_ref() {
+        let package_multiplier = state
+            .data
+            .resolve_user_package_billing_multiplier(&auth_context.user_id, current_unix_secs())
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?
+            .unwrap_or(aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER);
+        let package_multiplier =
+            aether_data::repository::auth::normalize_api_key_billing_multiplier(Some(
+                package_multiplier,
+            ))
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        billed_capacity_to_provider_cost(quota.remaining_usd.max(0.0), package_multiplier)
+    } else {
+        Some(0.0)
+    };
+
+    Ok(match auth_context.api_key_billing_source_mode {
+        ApiKeyBillingSourceMode::Auto => {
+            combine_provider_cost_capacities(package_capacity, wallet_capacity)
+        }
+        ApiKeyBillingSourceMode::Wallet => wallet_capacity,
+        ApiKeyBillingSourceMode::Package => package_capacity,
     })
 }
 
-fn wallet_finite_available_usd(
-    wallet: &aether_data::repository::wallet::StoredWalletSnapshot,
+fn wallet_provider_cost_capacity(
+    wallet: Option<&aether_data::repository::wallet::StoredWalletSnapshot>,
+    billing_multiplier: f64,
 ) -> Option<f64> {
-    if !wallet.status.eq_ignore_ascii_case("active")
-        || wallet.limit_mode.eq_ignore_ascii_case("unlimited")
-    {
+    let Some(wallet) = wallet else {
+        return Some(0.0);
+    };
+    if !wallet.status.eq_ignore_ascii_case("active") {
+        return Some(0.0);
+    }
+    if wallet.limit_mode.eq_ignore_ascii_case("unlimited") {
         return None;
     }
-    Some(wallet.balance.max(0.0) + wallet.gift_balance.max(0.0))
+    if billing_multiplier <= DAILY_QUOTA_EPSILON_USD {
+        return None;
+    }
+    billed_capacity_to_provider_cost(
+        wallet.balance.max(0.0) + wallet.gift_balance.max(0.0),
+        billing_multiplier,
+    )
+}
+
+fn billed_capacity_to_provider_cost(
+    billed_capacity_usd: f64,
+    billing_multiplier: f64,
+) -> Option<f64> {
+    if billing_multiplier <= DAILY_QUOTA_EPSILON_USD {
+        return (billed_capacity_usd <= DAILY_QUOTA_EPSILON_USD).then_some(0.0);
+    }
+    Some(billed_capacity_usd / billing_multiplier)
+}
+
+fn combine_provider_cost_capacities(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left + right),
+        (None, _) | (_, None) => None,
+    }
 }
 
 async fn estimate_execution_plan_cost_upper_bound_usd(
@@ -928,6 +970,7 @@ mod tests {
             username: None,
             api_key_name: None,
             api_key_billing_multiplier: 1.0,
+            api_key_billing_source_mode: Default::default(),
             balance_remaining: None,
             access_allowed: true,
             user_rate_limit: None,
@@ -1776,6 +1819,8 @@ mod tests {
         let mut decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
         if let Some(auth_context) = decision.auth_context.as_mut() {
             auth_context.admin_bypass_limits = true;
+            auth_context.api_key_billing_source_mode =
+                aether_data::repository::auth::ApiKeyBillingSourceMode::Package;
         }
         let plan = execution_plan(
             json!({
@@ -1858,6 +1903,12 @@ mod tests {
         );
         let state = state_with_quota_and_wallet(quota_availability(45.0, false), context);
         let mut decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
+        decision
+            .auth_context
+            .as_mut()
+            .expect("auth context should exist")
+            .api_key_billing_source_mode =
+            aether_data::repository::auth::ApiKeyBillingSourceMode::Wallet;
         let plan = execution_plan(
             json!({
                 "model": "gpt-5",
@@ -1895,13 +1946,13 @@ mod tests {
             .await
             .expect("multiplied capacity should resolve"),
             Some(GatewayLocalAuthRejection::BalanceDenied {
-                remaining: Some(45.0),
+                remaining: Some(15.0),
             })
         );
     }
 
     #[tokio::test]
-    async fn zero_api_key_billing_multiplier_allows_zero_balance() {
+    async fn zero_api_key_billing_multiplier_provides_unbounded_wallet_capacity() {
         let context = billing_context_with_pricing(
             Some(json!({
                 "tiers": [{
@@ -1921,6 +1972,12 @@ mod tests {
             .as_mut()
             .expect("auth context should exist")
             .api_key_billing_multiplier = 0.0;
+        decision
+            .auth_context
+            .as_mut()
+            .expect("auth context should exist")
+            .api_key_billing_source_mode =
+            aether_data::repository::auth::ApiKeyBillingSourceMode::Wallet;
         let plan = execution_plan(
             json!({
                 "model": "gpt-5",
@@ -1958,7 +2015,13 @@ mod tests {
             None,
         );
         let state = state_with_quota_and_wallet(quota_availability(50.0, false), context);
-        let decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
+        let mut decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
+        decision
+            .auth_context
+            .as_mut()
+            .expect("auth context should exist")
+            .api_key_billing_source_mode =
+            aether_data::repository::auth::ApiKeyBillingSourceMode::Package;
         let plan = execution_plan(
             json!({
                 "model": "gpt-5",
@@ -2074,7 +2137,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wallet_overage_policy_extends_known_cost_capacity_when_enabled() {
+    async fn auto_source_extends_known_cost_capacity_with_wallet() {
         let context = billing_context_with_pricing(
             Some(json!({
                 "tiers": [{
@@ -2087,7 +2150,7 @@ mod tests {
             None,
             None,
         );
-        let state = state_with_quota_and_wallet(quota_availability(50.0, true), context);
+        let state = state_with_quota_and_wallet(quota_availability(50.0, false), context);
         let decision = decision_with_allowed_models(vec!["gpt-5".to_string()]);
         let plan = execution_plan(
             json!({

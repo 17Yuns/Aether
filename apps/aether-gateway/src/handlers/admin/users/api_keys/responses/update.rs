@@ -9,7 +9,10 @@ use super::super::helpers::{
 use super::super::paths::admin_user_api_key_parts;
 
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
-use crate::handlers::shared::normalize_optional_api_key_concurrent_limit;
+use crate::handlers::shared::{
+    normalize_optional_api_key_concurrent_limit, set_api_key_billing_multiplier_mode,
+    set_api_key_billing_source_mode,
+};
 use crate::GatewayError;
 use axum::{
     body::Body,
@@ -63,17 +66,44 @@ pub(crate) async fn build_admin_update_user_api_key_response(
         }
     };
     let (field_presence, payload) = patch.into_parts();
-    let feature_settings = if field_presence.contains("feature_settings") {
-        match normalize_admin_feature_settings(payload.feature_settings.flatten()) {
-            Ok(value) => Some(value),
-            Err(detail) => {
-                return Ok((
-                    http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "detail": detail })),
-                )
-                    .into_response());
+    let billing_settings_present = field_presence.contains("feature_settings")
+        || field_presence.contains("billing_multiplier")
+        || field_presence.contains("billing_multiplier_mode")
+        || field_presence.contains("billing_source");
+    let feature_settings = if billing_settings_present {
+        let current = state
+            .app()
+            .data
+            .read_auth_api_key_feature_settings(&user_id, &api_key_id, false)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        let mut settings = if field_presence.contains("feature_settings") {
+            match normalize_admin_feature_settings(payload.feature_settings.clone().flatten()) {
+                Ok(value) => value,
+                Err(detail) => {
+                    return Ok((
+                        http::StatusCode::BAD_REQUEST,
+                        Json(json!({ "detail": detail })),
+                    )
+                        .into_response());
+                }
             }
+        } else {
+            current
+        };
+        if field_presence.contains("billing_multiplier") {
+            settings = set_api_key_billing_multiplier_mode(
+                settings,
+                aether_data::repository::auth::ApiKeyBillingMultiplierMode::Custom,
+            );
         }
+        if let Some(mode) = payload.billing_multiplier_mode {
+            settings = set_api_key_billing_multiplier_mode(settings, mode);
+        }
+        if let Some(source) = payload.billing_source {
+            settings = set_api_key_billing_source_mode(settings, source);
+        }
+        Some(settings)
     } else {
         None
     };

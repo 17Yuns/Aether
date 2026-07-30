@@ -1114,6 +1114,8 @@ mod tests {
             total_cost_usd: 0.1,
             actual_total_cost_usd: 0.1,
             provider_actual_total_cost_usd: None,
+            billing_source_mode: None,
+            wallet_billing_multiplier: None,
             finalized_at_unix_secs: None,
         };
         assert!(input.validate().is_err());

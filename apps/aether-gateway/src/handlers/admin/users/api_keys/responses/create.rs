@@ -7,12 +7,15 @@ use super::super::helpers::{
     attach_audit_response, default_admin_user_api_key_name, format_optional_unix_secs_iso8601,
     generate_admin_user_api_key_plaintext, hash_admin_user_api_key, masked_user_api_key_display,
     normalize_admin_api_key_billing_multiplier, normalize_admin_api_key_providers,
-    normalize_admin_optional_api_key_name,
+    normalize_admin_optional_api_key_name, resolve_admin_user_api_key_billing_settings,
 };
 use super::super::paths::admin_user_id_from_api_keys_path;
 
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
-use crate::handlers::shared::normalize_optional_api_key_concurrent_limit;
+use crate::handlers::shared::{
+    normalize_optional_api_key_concurrent_limit, set_api_key_billing_multiplier_mode,
+    set_api_key_billing_source_mode,
+};
 use crate::GatewayError;
 use axum::{
     body::Body,
@@ -75,7 +78,7 @@ pub(crate) async fn build_admin_create_user_api_key_response(
     {
         return Ok((
             http::StatusCode::BAD_REQUEST,
-            Json(json!({ "detail": "当前仅支持 name、rate_limit、concurrent_limit、billing_multiplier、allowed_providers、ip_rules 字段" })),
+            Json(json!({ "detail": "当前仅支持 name、rate_limit、concurrent_limit、billing_multiplier、billing_multiplier_mode、billing_source、allowed_providers、ip_rules 字段" })),
         )
             .into_response());
     }
@@ -89,6 +92,18 @@ pub(crate) async fn build_admin_create_user_api_key_response(
                 .into_response());
         }
     };
+    let feature_settings = set_api_key_billing_multiplier_mode(
+        feature_settings,
+        payload
+            .billing_multiplier_mode
+            .unwrap_or(aether_data::repository::auth::ApiKeyBillingMultiplierMode::Custom),
+    );
+    let feature_settings = set_api_key_billing_source_mode(
+        feature_settings,
+        payload
+            .billing_source
+            .unwrap_or(aether_data::repository::auth::ApiKeyBillingSourceMode::Auto),
+    );
 
     let name = match normalize_admin_optional_api_key_name(payload.name) {
         Ok(Some(value)) => value,
@@ -227,8 +242,12 @@ pub(crate) async fn build_admin_create_user_api_key_response(
         )
         .await
         .map_err(|err| GatewayError::Internal(err.to_string()))?;
-    let (effective_billing_multiplier, billing_multiplier_source) =
-        billing_override.unwrap_or((created.billing_multiplier, "api_key"));
+    let (
+        billing_multiplier_mode,
+        effective_billing_multiplier,
+        billing_multiplier_source,
+        billing_source,
+    ) = resolve_admin_user_api_key_billing_settings(&created, billing_override);
 
     Ok(attach_audit_response(
         Json(json!({
@@ -239,8 +258,10 @@ pub(crate) async fn build_admin_create_user_api_key_response(
             "rate_limit": created.rate_limit,
             "concurrent_limit": created.concurrent_limit,
             "billing_multiplier": created.billing_multiplier,
+            "billing_multiplier_mode": billing_multiplier_mode.as_str(),
             "effective_billing_multiplier": effective_billing_multiplier,
             "billing_multiplier_source": billing_multiplier_source,
+            "billing_source": billing_source.as_str(),
             "ip_rules": created.ip_rules,
             "expires_at": format_optional_unix_secs_iso8601(created.expires_at_unix_secs),
             "last_used_at": format_optional_unix_secs_iso8601(created.last_used_at_unix_secs),

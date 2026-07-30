@@ -1,10 +1,13 @@
 mod memory;
 
 pub use aether_data_contracts::repository::auth::{
-    normalize_api_key_billing_multiplier, normalize_optional_billing_multiplier,
-    read_resolved_auth_api_key_snapshot, read_resolved_auth_api_key_snapshot_by_key_hash,
-    read_resolved_auth_api_key_snapshot_by_user_api_key_ids, AuthApiKeyExportSummary,
-    AuthApiKeyLookupKey, AuthApiKeyReadRepository, AuthApiKeyWriteRepository, AuthRepository,
+    api_key_billing_multiplier_mode_from_feature_settings,
+    api_key_billing_source_mode_from_feature_settings, normalize_api_key_billing_multiplier,
+    normalize_optional_billing_multiplier, read_resolved_auth_api_key_snapshot,
+    read_resolved_auth_api_key_snapshot_by_key_hash,
+    read_resolved_auth_api_key_snapshot_by_user_api_key_ids, ApiKeyBillingMultiplierMode,
+    ApiKeyBillingSourceMode, AuthApiKeyExportSummary, AuthApiKeyLookupKey,
+    AuthApiKeyReadRepository, AuthApiKeyWriteRepository, AuthRepository,
     CreateStandaloneApiKeyRecord, CreateUserApiKeyRecord, ResolvedAuthApiKeySnapshot,
     ResolvedAuthApiKeySnapshotReader, StandaloneApiKeyExportListQuery,
     StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot, UpdateStandaloneApiKeyBasicRecord,

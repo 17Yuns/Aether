@@ -3,6 +3,98 @@ use async_trait::async_trait;
 pub const DEFAULT_API_KEY_BILLING_MULTIPLIER: f64 = 1.0;
 pub const MAX_API_KEY_BILLING_MULTIPLIER: f64 = 1000.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeyBillingSourceMode {
+    Auto,
+    Wallet,
+    Package,
+}
+
+impl Default for ApiKeyBillingSourceMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl ApiKeyBillingSourceMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("auto") {
+            Some(Self::Auto)
+        } else if value.eq_ignore_ascii_case("wallet") {
+            Some(Self::Wallet)
+        } else if value.eq_ignore_ascii_case("package") {
+            Some(Self::Package)
+        } else {
+            None
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Wallet => "wallet",
+            Self::Package => "package",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeyBillingMultiplierMode {
+    Inherit,
+    Custom,
+}
+
+impl Default for ApiKeyBillingMultiplierMode {
+    fn default() -> Self {
+        Self::Custom
+    }
+}
+
+impl ApiKeyBillingMultiplierMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Custom => "custom",
+        }
+    }
+}
+
+pub fn api_key_billing_source_mode_from_feature_settings(
+    feature_settings: Option<&serde_json::Value>,
+) -> ApiKeyBillingSourceMode {
+    ApiKeyBillingSourceMode::parse(
+        feature_settings
+            .and_then(serde_json::Value::as_object)
+            .and_then(|settings| settings.get("billing_source"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|feature| feature.get("mode"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("auto"),
+    )
+    .unwrap_or_default()
+}
+
+pub fn api_key_billing_multiplier_mode_from_feature_settings(
+    feature_settings: Option<&serde_json::Value>,
+) -> ApiKeyBillingMultiplierMode {
+    match feature_settings
+        .and_then(serde_json::Value::as_object)
+        .and_then(|settings| settings.get("billing_multiplier"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|feature| feature.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    {
+        Some(value) if value.eq_ignore_ascii_case("inherit") => {
+            ApiKeyBillingMultiplierMode::Inherit
+        }
+        _ => ApiKeyBillingMultiplierMode::Custom,
+    }
+}
+
 pub const fn default_api_key_billing_multiplier() -> f64 {
     DEFAULT_API_KEY_BILLING_MULTIPLIER
 }
@@ -34,6 +126,10 @@ pub struct StoredAuthApiKeySnapshot {
     pub api_key_ip_rules: Option<Vec<String>>,
     #[serde(default = "default_api_key_billing_multiplier")]
     pub api_key_billing_multiplier: f64,
+}
+
+const fn default_api_key_billing_multiplier_mode() -> ApiKeyBillingMultiplierMode {
+    ApiKeyBillingMultiplierMode::Custom
 }
 
 impl StoredAuthApiKeySnapshot {
@@ -179,6 +275,10 @@ pub struct ResolvedAuthApiKeySnapshot {
     pub api_key_ip_rules: Option<Vec<String>>,
     #[serde(default = "default_api_key_billing_multiplier")]
     pub api_key_billing_multiplier: f64,
+    #[serde(default)]
+    pub api_key_billing_source_mode: ApiKeyBillingSourceMode,
+    #[serde(default = "default_api_key_billing_multiplier_mode")]
+    pub api_key_billing_multiplier_mode: ApiKeyBillingMultiplierMode,
     pub currently_usable: bool,
 }
 
@@ -210,10 +310,22 @@ impl ResolvedAuthApiKeySnapshot {
             api_key_allowed_models: snapshot.api_key_allowed_models,
             api_key_ip_rules: snapshot.api_key_ip_rules,
             api_key_billing_multiplier: snapshot.api_key_billing_multiplier,
+            api_key_billing_source_mode: ApiKeyBillingSourceMode::Auto,
+            api_key_billing_multiplier_mode: ApiKeyBillingMultiplierMode::Custom,
             currently_usable,
         };
         resolved.constrain_non_standalone_api_key_policy_to_user_policy();
         resolved
+    }
+
+    pub fn with_api_key_billing_settings(
+        mut self,
+        source_mode: ApiKeyBillingSourceMode,
+        multiplier_mode: ApiKeyBillingMultiplierMode,
+    ) -> Self {
+        self.api_key_billing_source_mode = source_mode;
+        self.api_key_billing_multiplier_mode = multiplier_mode;
+        self
     }
 
     pub fn effective_allowed_providers(&self) -> Option<&[String]> {
@@ -890,11 +1002,13 @@ mod tests {
     use async_trait::async_trait;
 
     use super::{
-        normalize_api_key_billing_multiplier, read_resolved_auth_api_key_snapshot_by_key_hash,
-        read_resolved_auth_api_key_snapshot_by_user_api_key_ids, AuthApiKeyLookupKey,
-        ResolvedAuthApiKeySnapshot, ResolvedAuthApiKeySnapshotReader, StoredAuthApiKeyExportRecord,
-        StoredAuthApiKeySnapshot, DEFAULT_API_KEY_BILLING_MULTIPLIER,
-        MAX_API_KEY_BILLING_MULTIPLIER,
+        api_key_billing_multiplier_mode_from_feature_settings,
+        api_key_billing_source_mode_from_feature_settings, normalize_api_key_billing_multiplier,
+        read_resolved_auth_api_key_snapshot_by_key_hash,
+        read_resolved_auth_api_key_snapshot_by_user_api_key_ids, ApiKeyBillingMultiplierMode,
+        ApiKeyBillingSourceMode, AuthApiKeyLookupKey, ResolvedAuthApiKeySnapshot,
+        ResolvedAuthApiKeySnapshotReader, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
+        DEFAULT_API_KEY_BILLING_MULTIPLIER, MAX_API_KEY_BILLING_MULTIPLIER,
     };
 
     #[test]
@@ -918,6 +1032,30 @@ mod tests {
                 .is_err()
         );
         assert!(normalize_api_key_billing_multiplier(Some(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn reads_api_key_billing_modes_with_legacy_defaults() {
+        assert_eq!(
+            api_key_billing_source_mode_from_feature_settings(None),
+            ApiKeyBillingSourceMode::Auto
+        );
+        assert_eq!(
+            api_key_billing_multiplier_mode_from_feature_settings(None),
+            ApiKeyBillingMultiplierMode::Custom
+        );
+        let settings = serde_json::json!({
+            "billing_source": {"mode": "package"},
+            "billing_multiplier": {"mode": "inherit"}
+        });
+        assert_eq!(
+            api_key_billing_source_mode_from_feature_settings(Some(&settings)),
+            ApiKeyBillingSourceMode::Package
+        );
+        assert_eq!(
+            api_key_billing_multiplier_mode_from_feature_settings(Some(&settings)),
+            ApiKeyBillingMultiplierMode::Inherit
+        );
     }
 
     #[test]

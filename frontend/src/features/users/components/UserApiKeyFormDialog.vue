@@ -15,7 +15,7 @@
               {{ isEditing ? legacyT('编辑 API Key') : legacyT('创建 API Key') }}
             </h3>
             <p class="text-xs text-muted-foreground">
-              {{ isEditing ? legacyT('更新用户 API Key 的名称、速率限制和并发限制') : legacyT('为用户创建新的 API Key') }}
+              {{ isEditing ? legacyT('更新用户 API Key 配置') : legacyT('为用户创建新的 API Key') }}
             </p>
           </div>
         </div>
@@ -39,26 +39,68 @@
         />
       </div>
 
-      <div class="space-y-2">
-        <Label
-          for="admin-user-key-billing-multiplier"
-          class="text-sm font-medium"
-        >
-          {{ legacyT('Key 基础倍率') }}
-        </Label>
-        <Input
-          id="admin-user-key-billing-multiplier"
-          :model-value="form.billing_multiplier"
-          type="number"
-          min="0"
-          max="1000"
-          step="0.01"
-          class="h-10"
-          @update:model-value="updateField('billing_multiplier', parseNumberInput($event, { allowFloat: true, min: 0, max: 1000 }) ?? 1)"
-        />
-        <p class="text-xs text-muted-foreground">
-          {{ legacyT('存在套餐或分组倍率时，实际计费会按优先级覆盖此值') }}
-        </p>
+      <div class="space-y-3 border-y border-border/60 py-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <Label class="text-sm font-medium">
+              {{ legacyT('扣费来源') }}
+            </Label>
+            <p class="mt-1 text-xs text-muted-foreground">
+              {{ billingSourceDescription }}
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <Button
+              v-for="option in billingSourceOptions"
+              :key="option.value"
+              size="sm"
+              :variant="form.billing_source === option.value ? 'default' : 'outline'"
+              @click="updateField('billing_source', option.value)"
+            >
+              {{ option.label }}
+            </Button>
+          </div>
+        </div>
+
+        <div class="border-t border-border/50 pt-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <Label class="text-sm font-medium">
+                {{ legacyT('钱包扣费倍率') }}
+              </Label>
+              <p class="mt-1 text-xs text-muted-foreground">
+                {{ legacyT('套餐额度始终使用套餐自身倍率') }}
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                size="sm"
+                :variant="form.billing_multiplier_mode === 'inherit' ? 'default' : 'outline'"
+                @click="updateField('billing_multiplier_mode', 'inherit')"
+              >
+                {{ legacyT('跟随用户组') }}
+              </Button>
+              <Button
+                size="sm"
+                :variant="form.billing_multiplier_mode === 'custom' ? 'default' : 'outline'"
+                @click="updateField('billing_multiplier_mode', 'custom')"
+              >
+                {{ legacyT('自定义') }}
+              </Button>
+            </div>
+          </div>
+          <Input
+            v-if="form.billing_multiplier_mode === 'custom'"
+            id="admin-user-key-billing-multiplier"
+            :model-value="form.billing_multiplier"
+            type="number"
+            min="0"
+            max="1000"
+            step="0.01"
+            class="mt-3 h-10"
+            @update:model-value="updateField('billing_multiplier', parseNumberInput($event, { allowFloat: true, min: 0, max: 1000 }) ?? 1)"
+          />
+        </div>
       </div>
 
       <div class="space-y-2">
@@ -204,12 +246,15 @@ import { Key } from 'lucide-vue-next'
 import { Button, Dialog, Input, Label, Switch } from '@/components/ui'
 import { useI18n } from '@/i18n'
 import { parseNumberInput } from '@/utils/form'
+import type { ApiKeyBillingMultiplierMode, ApiKeyBillingSourceMode } from '@/utils/featureSettings'
 
 export interface UserApiKeyFormState {
   name: string
   rate_limit?: number
   concurrent_limit?: number
   billing_multiplier: number
+  billing_multiplier_mode: ApiKeyBillingMultiplierMode
+  billing_source: ApiKeyBillingSourceMode
   ip_rules_text: string
   chat_pii_redaction_mode: 'inherit' | 'custom'
   chat_pii_redaction_enabled: boolean
@@ -230,6 +275,22 @@ const emit = defineEmits<{
 }>()
 
 const { legacyT } = useI18n()
+
+const billingSourceOptions = computed<Array<{ value: ApiKeyBillingSourceMode; label: string }>>(() => [
+  { value: 'auto', label: legacyT('自动') },
+  { value: 'package', label: legacyT('套餐') },
+  { value: 'wallet', label: legacyT('钱包') },
+])
+
+const billingSourceDescription = computed(() => {
+  if (props.form.billing_source === 'package') {
+    return legacyT('仅使用套餐额度，额度不足时拒绝请求')
+  }
+  if (props.form.billing_source === 'wallet') {
+    return legacyT('跳过套餐额度，直接从钱包扣费')
+  }
+  return legacyT('优先使用套餐额度，耗尽后自动切换钱包')
+})
 
 const submitLabel = computed(() => {
   if (props.creating) {

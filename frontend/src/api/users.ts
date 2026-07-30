@@ -2,6 +2,7 @@ import apiClient from './client'
 import { cachedRequest } from '@/utils/cache'
 import type { UserSession as SessionRecord } from '@/types/session'
 import type { BillingPlan, UserPlanEntitlement } from './billing'
+import type { ApiKeyBillingMultiplierMode, ApiKeyBillingSourceMode } from '@/utils/featureSettings'
 
 export type UserRole = 'admin' | 'audit_admin' | 'user'
 export type ListPolicyMode = 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
@@ -228,8 +229,10 @@ export interface ApiKey {
   rate_limit?: number | null  // 普通Key: 0 = 不限制，历史 null 视为跟随系统默认
   concurrent_limit?: number | null  // 普通Key: 0 = 不限制并发，历史 null 兼容
   billing_multiplier?: number
+  billing_multiplier_mode?: ApiKeyBillingMultiplierMode
   effective_billing_multiplier?: number
-  billing_multiplier_source?: 'plan' | 'group' | 'api_key'
+  billing_multiplier_source?: 'default' | 'group' | 'api_key'
+  billing_source?: ApiKeyBillingSourceMode
   ip_rules?: string[] | null
   total_requests?: number  // 总请求数
   total_cost_usd?: number  // 总费用
@@ -240,6 +243,8 @@ export interface UpsertUserApiKeyRequest {
   rate_limit?: number | null
   concurrent_limit?: number | null
   billing_multiplier?: number
+  billing_multiplier_mode?: ApiKeyBillingMultiplierMode
+  billing_source?: ApiKeyBillingSourceMode
   ip_rules?: string[] | null
   feature_settings?: FeatureSettings | null
 }

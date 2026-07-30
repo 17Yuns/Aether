@@ -54,6 +54,8 @@ pub(crate) fn normalize_feature_settings(value: Option<Value>) -> Result<Option<
         Value::Null => Ok(None),
         Value::Object(ref mut settings) => {
             normalize_chat_pii_redaction_feature_settings(settings)?;
+            normalize_billing_source_feature_settings(settings)?;
+            normalize_billing_multiplier_feature_settings(settings)?;
             normalize_notification_push_service_feature_settings(settings)?;
             if settings.is_empty() {
                 Ok(None)
@@ -63,6 +65,62 @@ pub(crate) fn normalize_feature_settings(value: Option<Value>) -> Result<Option<
         }
         _ => Err("feature_settings 必须是对象".to_string()),
     }
+}
+
+pub(crate) fn set_api_key_billing_multiplier_mode(
+    value: Option<Value>,
+    mode: aether_data::repository::auth::ApiKeyBillingMultiplierMode,
+) -> Option<Value> {
+    let mut settings = match value {
+        Some(Value::Object(settings)) => settings,
+        _ => Map::new(),
+    };
+    settings.insert(
+        "billing_multiplier".to_string(),
+        serde_json::json!({"mode": mode.as_str()}),
+    );
+    Some(Value::Object(settings))
+}
+
+pub(crate) fn set_api_key_billing_source_mode(
+    value: Option<Value>,
+    mode: aether_data::repository::auth::ApiKeyBillingSourceMode,
+) -> Option<Value> {
+    let mut settings = match value {
+        Some(Value::Object(settings)) => settings,
+        _ => Map::new(),
+    };
+    if mode == aether_data::repository::auth::ApiKeyBillingSourceMode::Auto {
+        settings.remove("billing_source");
+    } else {
+        settings.insert(
+            "billing_source".to_string(),
+            serde_json::json!({"mode": mode.as_str()}),
+        );
+    }
+    (!settings.is_empty()).then_some(Value::Object(settings))
+}
+
+pub(crate) fn preserve_api_key_billing_multiplier_setting(
+    value: Option<Value>,
+    current: Option<&Value>,
+) -> Option<Value> {
+    let mut settings = match value {
+        Some(Value::Object(settings)) => settings,
+        _ => Map::new(),
+    };
+    match current
+        .and_then(Value::as_object)
+        .and_then(|settings| settings.get("billing_multiplier"))
+    {
+        Some(feature) => {
+            settings.insert("billing_multiplier".to_string(), feature.clone());
+        }
+        None => {
+            settings.remove("billing_multiplier");
+        }
+    }
+    (!settings.is_empty()).then_some(Value::Object(settings))
 }
 
 pub(crate) fn normalize_user_self_feature_settings_update(
@@ -385,6 +443,69 @@ fn normalize_notification_push_service_feature_settings(
     }
 }
 
+fn normalize_billing_source_feature_settings(
+    settings: &mut Map<String, Value>,
+) -> Result<(), String> {
+    normalize_api_key_billing_mode_feature(
+        settings,
+        "billing_source",
+        &["auto", "wallet", "package"],
+        true,
+    )
+}
+
+fn normalize_billing_multiplier_feature_settings(
+    settings: &mut Map<String, Value>,
+) -> Result<(), String> {
+    normalize_api_key_billing_mode_feature(
+        settings,
+        "billing_multiplier",
+        &["inherit", "custom"],
+        false,
+    )
+}
+
+fn normalize_api_key_billing_mode_feature(
+    settings: &mut Map<String, Value>,
+    feature_name: &str,
+    allowed_modes: &[&str],
+    remove_default_auto: bool,
+) -> Result<(), String> {
+    let Some(value) = settings.get_mut(feature_name) else {
+        return Ok(());
+    };
+    match value {
+        Value::Null => {
+            settings.remove(feature_name);
+            Ok(())
+        }
+        Value::Object(feature) => {
+            let Some(mode_value) = feature.get("mode") else {
+                settings.remove(feature_name);
+                return Ok(());
+            };
+            let Some(mode) = mode_value.as_str() else {
+                return Err(format!("{feature_name}.mode 必须是字符串"));
+            };
+            let normalized = mode.trim().to_ascii_lowercase();
+            if !allowed_modes.contains(&normalized.as_str()) {
+                return Err(format!(
+                    "{feature_name}.mode 必须是 {}",
+                    allowed_modes.join("、")
+                ));
+            }
+            if remove_default_auto && normalized == "auto" {
+                settings.remove(feature_name);
+            } else {
+                feature.clear();
+                feature.insert("mode".to_string(), Value::String(normalized));
+            }
+            Ok(())
+        }
+        _ => Err(format!("{feature_name} 必须是对象")),
+    }
+}
+
 fn normalize_notification_push_service_feature_object(
     feature: &mut Map<String, Value>,
 ) -> Result<(), String> {
@@ -445,6 +566,23 @@ mod tests {
             normalized["notification_push_service"]["enabled"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn normalize_feature_settings_canonicalizes_api_key_billing_modes() {
+        let normalized = normalize_feature_settings(Some(json!({
+            "billing_source": {"mode": " Package ", "ignored": true},
+            "billing_multiplier": {"mode": " Inherit ", "ignored": true}
+        })))
+        .expect("billing settings should normalize")
+        .expect("billing settings should remain set");
+
+        assert_eq!(normalized["billing_source"], json!({"mode": "package"}));
+        assert_eq!(normalized["billing_multiplier"], json!({"mode": "inherit"}));
+        assert!(normalize_feature_settings(Some(json!({
+            "billing_source": {"mode": "unknown"}
+        })))
+        .is_err());
     }
 
     #[test]

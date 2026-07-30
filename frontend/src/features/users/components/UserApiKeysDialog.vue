@@ -74,6 +74,12 @@
                   >
                     {{ formatEffectiveBillingMultiplier(apiKey) }}
                   </Badge>
+                  <Badge
+                    variant="secondary"
+                    class="text-xs"
+                  >
+                    {{ formatBillingSource(apiKey) }}
+                  </Badge>
                 </div>
                 <div class="mt-0.5 flex items-center gap-1">
                   <code class="font-mono text-xs text-muted-foreground">
@@ -207,12 +213,21 @@ const { legacyT } = useI18n()
 
 function formatEffectiveBillingMultiplier(apiKey: ApiKey): string {
   const sourceLabels = {
-    plan: legacyT('套餐'),
+    default: legacyT('默认'),
     group: legacyT('分组'),
     api_key: 'Key',
   }
   const source = apiKey.billing_multiplier_source || 'api_key'
   const value = apiKey.effective_billing_multiplier ?? apiKey.billing_multiplier
   return `${props.formatBillingMultiplier(value)} · ${sourceLabels[source]}`
+}
+
+function formatBillingSource(apiKey: ApiKey): string {
+  const labels = {
+    auto: legacyT('自动扣费'),
+    package: legacyT('仅套餐'),
+    wallet: legacyT('仅钱包'),
+  }
+  return labels[apiKey.billing_source ?? 'auto']
 }
 </script>

@@ -14,6 +14,8 @@ pub struct ExecutionRuntimeAuthContext {
     pub api_key_name: Option<String>,
     #[serde(default = "default_api_key_billing_multiplier")]
     pub api_key_billing_multiplier: f64,
+    #[serde(default = "default_api_key_billing_source")]
+    pub api_key_billing_source: String,
     pub balance_remaining: Option<f64>,
     pub access_allowed: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -22,4 +24,8 @@ pub struct ExecutionRuntimeAuthContext {
 
 fn default_api_key_billing_multiplier() -> f64 {
     1.0
+}
+
+fn default_api_key_billing_source() -> String {
+    "auto".to_string()
 }

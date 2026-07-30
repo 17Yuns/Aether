@@ -123,6 +123,8 @@ pub(super) fn sample_auth_snapshot(api_key_id: &str) -> GatewayAuthApiKeySnapsho
         api_key_id: api_key_id.to_string(),
         api_key_name: Some("default".to_string()),
         api_key_billing_multiplier: 1.0,
+        api_key_billing_source_mode: Default::default(),
+        api_key_billing_multiplier_mode: Default::default(),
         api_key_is_active: true,
         api_key_is_locked: false,
         api_key_is_standalone: false,

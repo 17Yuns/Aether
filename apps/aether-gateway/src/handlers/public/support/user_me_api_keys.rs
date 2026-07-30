@@ -13,7 +13,8 @@ use crate::handlers::shared::{
     api_key_placeholder_display, deserialize_optional_json_patch,
     deserialize_optional_string_list_patch, generate_gateway_api_key_plaintext,
     masked_gateway_api_key_display, normalize_feature_settings, normalize_ip_rules,
-    normalize_optional_api_key_concurrent_limit,
+    normalize_optional_api_key_concurrent_limit, preserve_api_key_billing_multiplier_setting,
+    set_api_key_billing_multiplier_mode,
 };
 
 use super::{
@@ -157,8 +158,12 @@ fn build_users_me_api_key_list_payload(
     is_locked: bool,
     billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
-    let (effective_billing_multiplier, billing_multiplier_source) =
-        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
+    let (
+        billing_multiplier_mode,
+        effective_billing_multiplier,
+        billing_multiplier_source,
+        billing_source,
+    ) = resolve_users_me_api_key_billing_settings(record, billing_override);
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -170,8 +175,10 @@ fn build_users_me_api_key_list_payload(
         "total_requests": record.total_requests,
         "total_cost_usd": record.total_cost_usd,
         "billing_multiplier": record.billing_multiplier,
+        "billing_multiplier_mode": billing_multiplier_mode.as_str(),
         "effective_billing_multiplier": effective_billing_multiplier,
         "billing_multiplier_source": billing_multiplier_source,
+        "billing_source": billing_source.as_str(),
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "allowed_providers": record.allowed_providers,
@@ -187,8 +194,12 @@ fn build_users_me_api_key_detail_payload(
     is_locked: bool,
     billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
-    let (effective_billing_multiplier, billing_multiplier_source) =
-        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
+    let (
+        billing_multiplier_mode,
+        effective_billing_multiplier,
+        billing_multiplier_source,
+        billing_source,
+    ) = resolve_users_me_api_key_billing_settings(record, billing_override);
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -200,14 +211,51 @@ fn build_users_me_api_key_detail_payload(
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
         "billing_multiplier": record.billing_multiplier,
+        "billing_multiplier_mode": billing_multiplier_mode.as_str(),
         "effective_billing_multiplier": effective_billing_multiplier,
         "billing_multiplier_source": billing_multiplier_source,
+        "billing_source": billing_source.as_str(),
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(record.last_used_at_unix_secs),
         "expires_at": format_users_me_optional_unix_secs_iso8601(record.expires_at_unix_secs),
         "created_at": format_users_me_optional_unix_secs_iso8601(record.created_at_unix_secs),
     })
+}
+
+fn resolve_users_me_api_key_billing_settings(
+    record: &aether_data::repository::auth::StoredAuthApiKeyExportRecord,
+    group_override: Option<(f64, &'static str)>,
+) -> (
+    aether_data::repository::auth::ApiKeyBillingMultiplierMode,
+    f64,
+    &'static str,
+    aether_data::repository::auth::ApiKeyBillingSourceMode,
+) {
+    let multiplier_mode =
+        aether_data::repository::auth::api_key_billing_multiplier_mode_from_feature_settings(
+            record.feature_settings.as_ref(),
+        );
+    let billing_source =
+        aether_data::repository::auth::api_key_billing_source_mode_from_feature_settings(
+            record.feature_settings.as_ref(),
+        );
+    let (effective_multiplier, multiplier_source) = match multiplier_mode {
+        aether_data::repository::auth::ApiKeyBillingMultiplierMode::Inherit => group_override
+            .unwrap_or((
+                aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER,
+                "default",
+            )),
+        aether_data::repository::auth::ApiKeyBillingMultiplierMode::Custom => {
+            (record.billing_multiplier, "api_key")
+        }
+    };
+    (
+        multiplier_mode,
+        effective_multiplier,
+        multiplier_source,
+        billing_source,
+    )
 }
 
 fn normalize_users_me_required_api_key_name(value: &str) -> Result<String, String> {
@@ -606,6 +654,10 @@ pub(super) async fn handle_users_me_api_key_create(
             return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
         }
     };
+    let feature_settings = set_api_key_billing_multiplier_mode(
+        feature_settings,
+        aether_data::repository::auth::ApiKeyBillingMultiplierMode::Inherit,
+    );
     let ip_rules = match normalize_users_me_ip_rules(payload.ip_rules) {
         Ok(value) => value,
         Err(detail) => {
@@ -693,8 +745,12 @@ pub(super) async fn handle_users_me_api_key_create(
             )
         }
     };
-    let (effective_billing_multiplier, billing_multiplier_source) =
-        billing_override.unwrap_or((created.billing_multiplier, "api_key"));
+    let (
+        billing_multiplier_mode,
+        effective_billing_multiplier,
+        billing_multiplier_source,
+        billing_source,
+    ) = resolve_users_me_api_key_billing_settings(&created, billing_override);
 
     Json(json!({
         "id": created.api_key_id,
@@ -706,8 +762,10 @@ pub(super) async fn handle_users_me_api_key_create(
         "rate_limit": created.rate_limit,
         "concurrent_limit": created.concurrent_limit,
         "billing_multiplier": created.billing_multiplier,
+        "billing_multiplier_mode": billing_multiplier_mode.as_str(),
         "effective_billing_multiplier": effective_billing_multiplier,
         "billing_multiplier_source": billing_multiplier_source,
+        "billing_source": billing_source.as_str(),
         "ip_rules": created.ip_rules,
         "feature_settings": created.feature_settings,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(created.last_used_at_unix_secs),
@@ -781,9 +839,30 @@ pub(super) async fn handle_users_me_api_key_update(
                 return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
             }
         };
+    let current_feature_settings = match state
+        .data
+        .read_auth_api_key_feature_settings(
+            &auth.user.id,
+            &snapshot.api_key_id,
+            snapshot.api_key_is_standalone,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            return build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("user api key feature settings lookup failed: {err:?}"),
+                false,
+            )
+        }
+    };
     let feature_settings = match payload.feature_settings {
         Some(value) => match normalize_feature_settings(value) {
-            Ok(value) => Some(value),
+            Ok(value) => Some(preserve_api_key_billing_multiplier_setting(
+                value,
+                current_feature_settings.as_ref(),
+            )),
             Err(detail) => {
                 return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
             }

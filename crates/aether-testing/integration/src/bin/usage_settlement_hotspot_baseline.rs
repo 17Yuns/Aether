@@ -481,6 +481,8 @@ fn settlement_input(index: usize) -> UsageSettlementInput {
         total_cost_usd: 0.0,
         actual_total_cost_usd: COST_PER_REQUEST_USD,
         provider_actual_total_cost_usd: None,
+        billing_source_mode: None,
+        wallet_billing_multiplier: None,
         finalized_at_unix_secs: Some(now_unix_secs().saturating_add(index as u64)),
     }
 }

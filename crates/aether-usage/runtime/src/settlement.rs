@@ -1,5 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
+use aether_data_contracts::repository::auth::ApiKeyBillingSourceMode;
 use aether_data_contracts::repository::settlement::{StoredUsageSettlement, UsageSettlementInput};
 use aether_data_contracts::repository::usage::StoredRequestUsageAudit;
 use aether_data_contracts::{DataLayerError, DataLayerError::InvalidInput};
@@ -42,6 +43,8 @@ pub async fn settle_usage_if_needed(
         total_cost_usd: finite_cost(usage.total_cost_usd)?,
         actual_total_cost_usd: finite_cost(usage.actual_total_cost_usd)?,
         provider_actual_total_cost_usd: usage.settlement_provider_actual_total_cost(),
+        billing_source_mode: usage_billing_source_mode(usage),
+        wallet_billing_multiplier: usage_wallet_billing_multiplier(usage),
         finalized_at_unix_secs,
     };
     let settlement_key = usage_settlement_lock_key(&input);
@@ -83,6 +86,24 @@ fn usage_api_key_is_standalone(usage: &StoredRequestUsageAudit) -> bool {
         .and_then(|metadata| metadata.get("api_key_is_standalone"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+}
+
+fn usage_billing_source_mode(usage: &StoredRequestUsageAudit) -> Option<ApiKeyBillingSourceMode> {
+    usage
+        .request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("api_key_billing_source"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(ApiKeyBillingSourceMode::parse)
+}
+
+fn usage_wallet_billing_multiplier(usage: &StoredRequestUsageAudit) -> Option<f64> {
+    usage
+        .request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("api_key_billing_multiplier"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
 }
 
 fn finite_cost(value: f64) -> Result<f64, DataLayerError> {
@@ -249,6 +270,31 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].actual_total_cost_usd, 0.75);
         assert_eq!(inputs[0].provider_actual_total_cost_usd, Some(0.25));
+    }
+
+    #[tokio::test]
+    async fn propagates_api_key_billing_source_and_wallet_multiplier() {
+        let writer = TestSettlementWriter {
+            has_writer: true,
+            ..Default::default()
+        };
+        let mut usage = sample_usage();
+        usage.request_metadata = Some(json!({
+            "api_key_billing_source": "package",
+            "api_key_billing_multiplier": 0.8,
+            "provider_actual_total_cost": 0.25
+        }));
+
+        settle_usage_if_needed(&writer, &usage)
+            .await
+            .expect("settlement should succeed");
+
+        let inputs = writer.inputs.lock().expect("settlement inputs lock");
+        assert_eq!(
+            inputs[0].billing_source_mode,
+            Some(aether_data_contracts::repository::auth::ApiKeyBillingSourceMode::Package)
+        );
+        assert_eq!(inputs[0].wallet_billing_multiplier, Some(0.8));
     }
 
     #[tokio::test]

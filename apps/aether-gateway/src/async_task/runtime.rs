@@ -637,6 +637,7 @@ mod tests {
                 username: Some("user".to_string()),
                 api_key_name: Some("primary".to_string()),
                 api_key_billing_multiplier: Some(1.0),
+                api_key_billing_source: Some("auto".to_string()),
                 client_api_format: "openai:video".to_string(),
                 provider_api_format: "openai:video".to_string(),
                 original_request_body: json!({

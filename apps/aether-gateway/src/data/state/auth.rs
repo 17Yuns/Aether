@@ -1781,11 +1781,33 @@ impl GatewayDataState {
         let Some(mut snapshot) = snapshot else {
             return Ok(None);
         };
+        let feature_settings = self
+            .read_auth_api_key_feature_settings(
+                &snapshot.user_id,
+                &snapshot.api_key_id,
+                snapshot.api_key_is_standalone,
+            )
+            .await?;
+        let billing_source_mode =
+            aether_data::repository::auth::api_key_billing_source_mode_from_feature_settings(
+                feature_settings.as_ref(),
+            );
+        let billing_multiplier_mode =
+            aether_data::repository::auth::api_key_billing_multiplier_mode_from_feature_settings(
+                feature_settings.as_ref(),
+            );
+        if !snapshot.api_key_is_standalone
+            && billing_multiplier_mode
+                == aether_data::repository::auth::ApiKeyBillingMultiplierMode::Inherit
+        {
+            snapshot.api_key_billing_multiplier =
+                aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER;
+        }
         let Some(repository) = self.user_reader.as_ref() else {
-            return Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
-                snapshot,
-                now_unix_secs,
-            )));
+            return Ok(Some(
+                GatewayAuthApiKeySnapshot::from_stored(snapshot, now_unix_secs)
+                    .with_api_key_billing_settings(billing_source_mode, billing_multiplier_mode),
+            ));
         };
         let Some(user) = crate::request_diagnostics::observe_db_operation(
             "auth_user_policy",
@@ -1794,10 +1816,10 @@ impl GatewayDataState {
         )
         .await?
         else {
-            return Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
-                snapshot,
-                now_unix_secs,
-            )));
+            return Ok(Some(
+                GatewayAuthApiKeySnapshot::from_stored(snapshot, now_unix_secs)
+                    .with_api_key_billing_settings(billing_source_mode, billing_multiplier_mode),
+            ));
         };
         snapshot.user_role = user.role;
         let groups = self
@@ -1814,17 +1836,17 @@ impl GatewayDataState {
         snapshot.user_allowed_api_formats = allowed_api_formats;
         snapshot.user_allowed_models = allowed_models;
         snapshot.user_rate_limit = user_rate_limit;
-        if !snapshot.api_key_is_standalone {
-            snapshot.api_key_billing_multiplier = self
-                .active_plan_billing_multiplier_for_user(&snapshot.user_id, now_unix_secs)
-                .await?
-                .or_else(|| resolve_group_billing_multiplier(&groups))
-                .unwrap_or(snapshot.api_key_billing_multiplier);
+        if !snapshot.api_key_is_standalone
+            && billing_multiplier_mode
+                == aether_data::repository::auth::ApiKeyBillingMultiplierMode::Inherit
+        {
+            snapshot.api_key_billing_multiplier = resolve_group_billing_multiplier(&groups)
+                .unwrap_or(aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER);
         }
-        Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
-            snapshot,
-            now_unix_secs,
-        )))
+        Ok(Some(
+            GatewayAuthApiKeySnapshot::from_stored(snapshot, now_unix_secs)
+                .with_api_key_billing_settings(billing_source_mode, billing_multiplier_mode),
+        ))
     }
 
     pub(crate) async fn resolve_user_effective_list_policies(
@@ -1937,7 +1959,7 @@ impl GatewayDataState {
                     && entitlement.expires_at_unix_secs > now_unix_secs
             })
             .filter_map(|entitlement| {
-                let multiplier = billing_multiplier_from_entitlement_snapshot(
+                let multiplier = daily_quota_billing_multiplier_from_entitlement_snapshot(
                     &entitlement.entitlements_snapshot,
                 )?;
                 Some((
@@ -1959,32 +1981,51 @@ impl GatewayDataState {
     pub(crate) async fn resolve_user_billing_multiplier_override(
         &self,
         user_id: &str,
-        now_unix_secs: u64,
+        _now_unix_secs: u64,
     ) -> Result<Option<(f64, &'static str)>, DataLayerError> {
-        if let Some(multiplier) = self
-            .active_plan_billing_multiplier_for_user(user_id, now_unix_secs)
-            .await?
-        {
-            return Ok(Some((multiplier, "plan")));
-        }
         let groups = self.effective_user_groups_for_user(user_id).await?;
         Ok(resolve_group_billing_multiplier(&groups).map(|multiplier| (multiplier, "group")))
     }
+
+    pub(crate) async fn resolve_user_package_billing_multiplier(
+        &self,
+        user_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<f64>, DataLayerError> {
+        self.active_plan_billing_multiplier_for_user(user_id, now_unix_secs)
+            .await
+    }
 }
 
-fn billing_multiplier_from_entitlement_snapshot(snapshot: &serde_json::Value) -> Option<f64> {
-    snapshot.as_array()?.iter().find_map(|item| {
-        if item.get("type").and_then(serde_json::Value::as_str) != Some("billing_multiplier") {
-            return None;
-        }
-        let multiplier = item.get("multiplier").and_then(serde_json::Value::as_f64)?;
-        aether_data::repository::auth::normalize_optional_billing_multiplier(
-            Some(multiplier),
-            "billing_multiplier.multiplier",
-        )
-        .ok()
-        .flatten()
-    })
+fn daily_quota_billing_multiplier_from_entitlement_snapshot(
+    snapshot: &serde_json::Value,
+) -> Option<f64> {
+    let items = snapshot.as_array()?;
+    if !items
+        .iter()
+        .any(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("daily_quota"))
+    {
+        return None;
+    }
+    Some(
+        items
+            .iter()
+            .find_map(|item| {
+                if item.get("type").and_then(serde_json::Value::as_str)
+                    != Some("billing_multiplier")
+                {
+                    return None;
+                }
+                let multiplier = item.get("multiplier").and_then(serde_json::Value::as_f64)?;
+                aether_data::repository::auth::normalize_optional_billing_multiplier(
+                    Some(multiplier),
+                    "billing_multiplier.multiplier",
+                )
+                .ok()
+                .flatten()
+            })
+            .unwrap_or(aether_data::repository::auth::DEFAULT_API_KEY_BILLING_MULTIPLIER),
+    )
 }
 
 fn resolve_group_billing_multiplier(
@@ -2218,8 +2259,8 @@ mod tests {
 
     use super::*;
     use aether_data::repository::auth::{
-        InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeyExportRecord,
-        StoredAuthApiKeySnapshot,
+        AuthApiKeyWriteRepository, InMemoryAuthApiKeySnapshotRepository,
+        StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
     };
     use aether_data::repository::billing::{
         InMemoryBillingReadRepository, UserPlanEntitlementRecord,
@@ -2335,7 +2376,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_plan_billing_multiplier_overrides_group_and_api_key() {
+    async fn inherited_wallet_multiplier_tracks_group_and_package_multiplier_stays_separate() {
         let now = chrono::Utc::now().timestamp().max(100) as u64;
         let mut snapshot = sample_snapshot("key-1", "user-1")
             .with_api_key_billing_multiplier(Some(1.5))
@@ -2345,6 +2386,14 @@ mod tests {
             Some("hash-1".to_string()),
             snapshot,
         )]));
+        auth_repository
+            .set_user_api_key_feature_settings(
+                "user-1",
+                "key-1",
+                Some(serde_json::json!({"billing_multiplier": {"mode": "inherit"}})),
+            )
+            .await
+            .expect("inherit mode should persist");
         let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
             sample_auth_user("user-1", "user"),
         ]));
@@ -2445,14 +2494,36 @@ mod tests {
             ]),
         );
         let plan_state = GatewayDataState::with_billing_reader_for_tests(billing_repository)
-            .with_auth_api_key_reader(auth_repository)
+            .with_auth_api_key_reader(auth_repository.clone())
             .with_user_reader(user_repository);
         let plan_resolved = plan_state
             .read_auth_api_key_snapshot_by_key_hash("hash-1", now)
             .await
             .expect("plan snapshot should resolve")
             .expect("plan snapshot should exist");
-        assert_eq!(plan_resolved.api_key_billing_multiplier, 0.5);
+        assert_eq!(plan_resolved.api_key_billing_multiplier, 1.2);
+        assert_eq!(
+            plan_state
+                .resolve_user_package_billing_multiplier("user-1", now)
+                .await
+                .expect("package multiplier should resolve"),
+            Some(0.7)
+        );
+
+        auth_repository
+            .set_user_api_key_feature_settings(
+                "user-1",
+                "key-1",
+                Some(serde_json::json!({"billing_multiplier": {"mode": "custom"}})),
+            )
+            .await
+            .expect("custom mode should persist");
+        let custom_resolved = plan_state
+            .read_auth_api_key_snapshot_by_key_hash("hash-1", now)
+            .await
+            .expect("custom snapshot should resolve")
+            .expect("custom snapshot should exist");
+        assert_eq!(custom_resolved.api_key_billing_multiplier, 1.5);
     }
 
     #[test]

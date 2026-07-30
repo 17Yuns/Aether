@@ -1594,6 +1594,10 @@ async fn gateway_handles_admin_user_api_key_routes_locally_with_trusted_admin_pr
     assert_eq!(create_payload["rate_limit"], 90);
     assert_eq!(create_payload["concurrent_limit"], serde_json::Value::Null);
     assert_eq!(create_payload["billing_multiplier"], 1.5);
+    assert_eq!(create_payload["billing_multiplier_mode"], "custom");
+    assert_eq!(create_payload["effective_billing_multiplier"], 1.5);
+    assert_eq!(create_payload["billing_multiplier_source"], "api_key");
+    assert_eq!(create_payload["billing_source"], "auto");
     assert_eq!(
         create_payload["message"],
         "API Key创建成功，请妥善保存完整密钥"
@@ -1623,6 +1627,8 @@ async fn gateway_handles_admin_user_api_key_routes_locally_with_trusted_admin_pr
             "rate_limit": 120,
             "concurrent_limit": 9,
             "billing_multiplier": 2.25,
+            "billing_multiplier_mode": "inherit",
+            "billing_source": "wallet",
         }))
         .send()
         .await
@@ -1638,6 +1644,10 @@ async fn gateway_handles_admin_user_api_key_routes_locally_with_trusted_admin_pr
     assert_eq!(update_payload["rate_limit"], 120);
     assert_eq!(update_payload["concurrent_limit"], 9);
     assert_eq!(update_payload["billing_multiplier"], 2.25);
+    assert_eq!(update_payload["billing_multiplier_mode"], "inherit");
+    assert_eq!(update_payload["effective_billing_multiplier"], 1.0);
+    assert_eq!(update_payload["billing_multiplier_source"], "default");
+    assert_eq!(update_payload["billing_source"], "wallet");
     assert_eq!(update_payload["created_at"], "2024-03-21T05:48:20+00:00");
     assert_eq!(update_payload["message"], "API Key更新成功");
 
