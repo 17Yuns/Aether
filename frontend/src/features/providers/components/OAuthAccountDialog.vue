@@ -2158,6 +2158,13 @@ function isCodexAgentIdentityObject(root: Record<string, unknown>): boolean {
     )
 }
 
+function isCodexNestedCredentialExport(root: Record<string, unknown>): boolean {
+  return isObjectRecord(root.tokens)
+    || isObjectRecord(root.providerSpecificData)
+    || isObjectRecord(root.meta)
+    || Array.isArray(root.accounts)
+}
+
 function requiresCodexBatchImport(credentials: string): boolean {
   if (!isCodexProvider.value) return false
 
@@ -2167,6 +2174,7 @@ function requiresCodexBatchImport(credentials: string): boolean {
 
     return isCodexAgentIdentityObject(parsed)
       || normalizeStringField(parsed.type)?.toLowerCase() === 'sub2api-data'
+      || isCodexNestedCredentialExport(parsed)
   } catch {
     return false
   }
@@ -2230,7 +2238,7 @@ async function handleImport() {
   let keepImporting = false
   try {
     const proxyNodeId = selectedProxyNodeId.value || undefined
-    // Kiro, Codex Agent Identity, and sub2api exports need their full JSON on the batch path.
+    // Structured exports need their full JSON so the backend can normalize nested credentials.
     if (
       isKiroProvider.value
       || normalizedCredentials.isBatch

@@ -725,6 +725,69 @@ describe('OAuthAccountDialog authorization and import', () => {
     }))
   })
 
+  it.each([
+    {
+      format: 'nested tokens',
+      credentials: {
+        auth_mode: 'oauth',
+        tokens: {
+          access_token: 'nested-access-token',
+          refresh_token: 'nested-refresh-token',
+          id_token: 'nested-id-token',
+        },
+      },
+    },
+    {
+      format: '9router metadata',
+      credentials: {
+        accessToken: 'router-access-token',
+        refreshToken: 'router-refresh-token',
+        providerSpecificData: {
+          chatgptAccountId: 'router-account',
+          chatgptPlanType: 'plus',
+        },
+      },
+    },
+    {
+      format: 'sub2api without a type marker',
+      credentials: {
+        exported_at: '2030-01-01T00:00:00Z',
+        proxies: [],
+        accounts: [{
+          name: 'sub2api@example.com',
+          platform: 'openai',
+          type: 'oauth',
+          credentials: {
+            access_token: 'sub2api-access-token',
+            refresh_token: 'sub2api-refresh-token',
+          },
+        }],
+      },
+    },
+  ])('sends a Codex $format export intact through batch import', async ({ credentials }) => {
+    const root = mountDialog('codex')
+    await settle()
+
+    getButton(root, '导入授权')?.click()
+    await settle()
+
+    const serialized = JSON.stringify(credentials)
+    const textarea = getImportTextarea(root)
+    textarea.value = serialized
+    textarea.dispatchEvent(new Event('input'))
+    await settle()
+
+    getExactButton(root, '导入')?.click()
+    await settle()
+
+    expect(endpointMocks.startBatchImportOAuthTask).toHaveBeenCalledWith(
+      'provider-1',
+      serialized,
+      undefined,
+    )
+    expect(endpointMocks.importProviderRefreshToken).not.toHaveBeenCalled()
+  })
+
   it('sends a single Codex Agent Identity auth JSON through batch import', async () => {
     const root = mountDialog('codex')
     await settle()

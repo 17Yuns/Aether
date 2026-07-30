@@ -154,6 +154,124 @@ fn json_import_expiry_from_keys(
         .find_map(|key| json_import_expiry_value(object.get(*key)))
 }
 
+fn codex_import_value_is_usable(canonical_key: &str, value: &serde_json::Value) -> bool {
+    if canonical_key == "headers" {
+        return value.is_object();
+    }
+    if canonical_key == "expires_at" {
+        return value.is_number() || value.as_str().is_some_and(|value| !value.trim().is_empty());
+    }
+    value.as_str().is_some_and(|value| !value.trim().is_empty())
+}
+
+const CODEX_IMPORT_FIELD_ALIASES: &[(&str, &[&str])] = &[
+    ("refresh_token", &["refresh_token", "refreshToken"]),
+    ("access_token", &["access_token", "accessToken"]),
+    (
+        "session_token",
+        &["session_token", "sessionToken", "sso_token", "ssoToken"],
+    ),
+    ("expires_at", &["expires_at", "expiresAt", "expired"]),
+    (
+        "account_id",
+        &[
+            "account_id",
+            "accountId",
+            "chatgpt_account_id",
+            "chatgptAccountId",
+        ],
+    ),
+    (
+        "account_user_id",
+        &[
+            "account_user_id",
+            "accountUserId",
+            "chatgpt_account_user_id",
+            "chatgptAccountUserId",
+        ],
+    ),
+    (
+        "plan_type",
+        &[
+            "plan_type",
+            "planType",
+            "chatgpt_plan_type",
+            "chatgptPlanType",
+        ],
+    ),
+    ("pool_tier", &["pool_tier", "poolTier", "tier"]),
+    (
+        "user_id",
+        &["user_id", "userId", "chatgpt_user_id", "chatgptUserId"],
+    ),
+    ("email", &["email", "oauth_email"]),
+    (
+        "account_name",
+        &["account_name", "accountName", "name", "label"],
+    ),
+    (
+        "headers",
+        &[
+            "headers",
+            "request_headers",
+            "requestHeaders",
+            "header_overrides",
+            "headerOverrides",
+            "extra_headers",
+            "extraHeaders",
+        ],
+    ),
+    ("user_agent", &["user_agent", "userAgent"]),
+    (
+        "browser_profile",
+        &[
+            "browser_profile",
+            "browserProfile",
+            "browser",
+            "impersonate",
+        ],
+    ),
+];
+
+fn merge_codex_import_layer(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    source: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (canonical_key, aliases) in CODEX_IMPORT_FIELD_ALIASES {
+        if target
+            .get(*canonical_key)
+            .is_some_and(|value| codex_import_value_is_usable(canonical_key, value))
+        {
+            continue;
+        }
+        let Some(value) = aliases
+            .iter()
+            .filter_map(|key| source.get(*key))
+            .find(|value| codex_import_value_is_usable(canonical_key, value))
+        else {
+            continue;
+        };
+        target.insert((*canonical_key).to_string(), value.clone());
+    }
+}
+
+fn normalize_codex_import_object(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut normalized = object.clone();
+    merge_codex_import_layer(&mut normalized, object);
+    for nested_key in ["tokens", "providerSpecificData", "meta"] {
+        if let Some(nested) = object
+            .get(nested_key)
+            .and_then(serde_json::Value::as_object)
+        {
+            merge_codex_import_layer(&mut normalized, nested);
+        }
+    }
+
+    normalized
+}
+
 fn grok_cookie_value(raw: &str, name: &str) -> Option<String> {
     raw.trim()
         .strip_prefix("Cookie:")
@@ -252,17 +370,20 @@ fn extract_admin_provider_oauth_batch_import_entry(
         }
         serde_json::Value::Object(object) => {
             let is_claude = provider_type.trim().eq_ignore_ascii_case("claude_code");
-            let normalized_claude_object = if is_claude {
+            let is_codex = provider_type.trim().eq_ignore_ascii_case("codex");
+            let normalized_object = if is_claude {
                 let mut normalized = object.clone();
                 flatten_claude_code_credentials_payload(&mut normalized);
                 Some(normalized)
+            } else if is_codex {
+                Some(normalize_codex_import_object(object))
             } else {
                 None
             };
-            let object = normalized_claude_object.as_ref().unwrap_or(object);
+            let object = normalized_object.as_ref().unwrap_or(object);
             let is_grok = provider_type.trim().eq_ignore_ascii_case("grok");
             let is_windsurf = provider_type.trim().eq_ignore_ascii_case("windsurf");
-            let is_codex_agent_identity = provider_type.trim().eq_ignore_ascii_case("codex")
+            let is_codex_agent_identity = is_codex
                 && aether_provider_transport::is_codex_agent_identity_auth_config_value(item);
             if is_codex_agent_identity {
                 return Some(AdminProviderOAuthBatchImportEntry {
@@ -557,10 +678,22 @@ fn parse_sub2api_export_accounts(
     if !provider_type.trim().eq_ignore_ascii_case("codex") {
         return None;
     }
-    let is_sub2api_export = object
+    let has_sub2api_type_marker = object
         .get("type")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("sub2api-data"));
+    let has_sub2api_account_shape = object
+        .get("accounts")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|accounts| {
+            accounts.iter().any(|account| {
+                account
+                    .as_object()
+                    .and_then(|account| account.get("credentials"))
+                    .is_some_and(serde_json::Value::is_object)
+            })
+        });
+    let is_sub2api_export = has_sub2api_type_marker || has_sub2api_account_shape;
     if !is_sub2api_export {
         return None;
     }
@@ -609,6 +742,18 @@ fn parse_sub2api_export_accounts(
                 .entry("account_name".to_string())
                 .or_insert_with(|| json!(name));
         }
+        for key in [
+            "account_id",
+            "chatgpt_account_id",
+            "chatgpt_user_id",
+            "email",
+            "plan_type",
+            "expires_at",
+        ] {
+            if let Some(value) = account.get(key).cloned() {
+                credentials.entry(key.to_string()).or_insert(value);
+            }
+        }
         if let Some(extra) = account.get("extra").and_then(serde_json::Value::as_object) {
             for key in [
                 "account_id",
@@ -643,6 +788,20 @@ fn parse_sub2api_export_accounts(
     Some(entries)
 }
 
+fn parse_admin_provider_oauth_batch_import_value(
+    provider_type: &str,
+    value: &serde_json::Value,
+) -> Vec<AdminProviderOAuthBatchImportEntry> {
+    if let Some(object) = value.as_object() {
+        if let Some(entries) = parse_sub2api_export_accounts(provider_type, object) {
+            return entries;
+        }
+    }
+    extract_admin_provider_oauth_batch_import_entry(provider_type, value)
+        .into_iter()
+        .collect()
+}
+
 pub(super) fn parse_admin_provider_oauth_batch_import_entries(
     provider_type: &str,
     raw_credentials: &str,
@@ -657,8 +816,8 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
             Ok(serde_json::Value::Array(items)) => {
                 return items
                     .iter()
-                    .filter_map(|item| {
-                        extract_admin_provider_oauth_batch_import_entry(provider_type, item)
+                    .flat_map(|item| {
+                        parse_admin_provider_oauth_batch_import_value(provider_type, item)
                     })
                     .collect();
             }
@@ -669,13 +828,8 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
 
     if raw.starts_with('{') {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
-            if let Some(object) = value.as_object() {
-                if let Some(entries) = parse_sub2api_export_accounts(provider_type, object) {
-                    return entries;
-                }
-                return extract_admin_provider_oauth_batch_import_entry(provider_type, &value)
-                    .into_iter()
-                    .collect();
+            if value.is_object() {
+                return parse_admin_provider_oauth_batch_import_value(provider_type, &value);
             }
         }
     }
@@ -683,22 +837,22 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
     raw.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|token| {
+        .flat_map(|token| {
             if is_json_like_batch_line(token) {
                 match serde_json::from_str::<serde_json::Value>(token) {
                     Ok(value @ serde_json::Value::Object(_)) => {
-                        return extract_admin_provider_oauth_batch_import_entry(
+                        return parse_admin_provider_oauth_batch_import_value(
                             provider_type,
                             &value,
                         );
                     }
                     Ok(_) => {
-                        return Some(parse_error_entry(
+                        return vec![parse_error_entry(
                             "JSON 行必须是账号对象，不能作为 raw token 导入".to_string(),
-                        ));
+                        )];
                     }
                     Err(error) => {
-                        return Some(parse_error_entry(format!("JSON 行解析失败: {error}")));
+                        return vec![parse_error_entry(format!("JSON 行解析失败: {error}"))];
                     }
                 }
             }
@@ -707,6 +861,8 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
                 provider_type,
                 &serde_json::Value::String(token.to_string()),
             )
+            .into_iter()
+            .collect()
         })
         .collect()
 }
@@ -724,15 +880,23 @@ pub(super) fn parse_admin_provider_oauth_agent_identity_import_entries(
         serde_json::Value::Array(items) => items
             .iter()
             .enumerate()
-            .map(|(index, item)| {
-                extract_admin_provider_oauth_batch_import_entry("codex", item).unwrap_or_else(
-                    || {
-                        parse_error_entry(format!(
-                            "第 {} 个条目没有可导入的 Agent Identity 凭据",
-                            index + 1
-                        ))
-                    },
-                )
+            .flat_map(|(index, item)| {
+                if let Some(entries) = item
+                    .as_object()
+                    .and_then(|object| parse_sub2api_export_accounts("codex", object))
+                {
+                    return entries;
+                }
+                vec![
+                    extract_admin_provider_oauth_batch_import_entry("codex", item).unwrap_or_else(
+                        || {
+                            parse_error_entry(format!(
+                                "第 {} 个条目没有可导入的 Agent Identity 凭据",
+                                index + 1
+                            ))
+                        },
+                    ),
+                ]
             })
             .collect(),
         serde_json::Value::Object(object) => parse_sub2api_export_accounts("codex", object)
@@ -1078,6 +1242,275 @@ mod tests {
         assert_eq!(entries[0].expires_at, Some(2_100_000_000));
         assert_eq!(entries[0].account_id.as_deref(), Some("acc-1"));
         assert_eq!(entries[0].email.as_deref(), Some("u@example.com"));
+    }
+
+    #[test]
+    fn parses_cpa_and_cockpit_codex_exports() {
+        let cpa_entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!({
+                "type": "codex",
+                "account_id": "cpa-account",
+                "email": "cpa@example.com",
+                "name": "CPA Account",
+                "plan_type": "PLUS",
+                "access_token": "cpa-access",
+                "refresh_token": "cpa-refresh",
+                "expired": "2030-01-01T00:00:00Z"
+            })
+            .to_string(),
+        );
+
+        assert_eq!(cpa_entries.len(), 1);
+        assert_eq!(cpa_entries[0].access_token.as_deref(), Some("cpa-access"));
+        assert_eq!(cpa_entries[0].refresh_token.as_deref(), Some("cpa-refresh"));
+        assert_eq!(cpa_entries[0].account_id.as_deref(), Some("cpa-account"));
+        assert_eq!(cpa_entries[0].plan_type.as_deref(), Some("plus"));
+        assert_eq!(cpa_entries[0].email.as_deref(), Some("cpa@example.com"));
+        assert_eq!(cpa_entries[0].account_name.as_deref(), Some("CPA Account"));
+        assert_eq!(cpa_entries[0].expires_at, Some(1_893_456_000));
+
+        let cockpit_entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!({
+                "type": "codex",
+                "account_id": "cockpit-account",
+                "email": "cockpit@example.com",
+                "access_token": "cockpit-access",
+                "refresh_token": "cockpit-refresh",
+                "expired": "2030-01-01T00:00:00Z"
+            })
+            .to_string(),
+        );
+
+        assert_eq!(cockpit_entries.len(), 1);
+        assert_eq!(
+            cockpit_entries[0].access_token.as_deref(),
+            Some("cockpit-access")
+        );
+        assert_eq!(
+            cockpit_entries[0].refresh_token.as_deref(),
+            Some("cockpit-refresh")
+        );
+        assert_eq!(
+            cockpit_entries[0].account_id.as_deref(),
+            Some("cockpit-account")
+        );
+        assert_eq!(
+            cockpit_entries[0].email.as_deref(),
+            Some("cockpit@example.com")
+        );
+        assert_eq!(cockpit_entries[0].expires_at, Some(1_893_456_000));
+    }
+
+    #[test]
+    fn parses_9router_codex_export_metadata() {
+        let entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!({
+                "accessToken": "router-access",
+                "refreshToken": "router-refresh",
+                "expiresAt": "2030-01-01T00:00:00Z",
+                "name": "9router Account",
+                "email": "router@example.com",
+                "providerSpecificData": {
+                    "chatgptAccountId": "router-account",
+                    "chatgptPlanType": "TEAM"
+                }
+            })
+            .to_string(),
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].access_token.as_deref(), Some("router-access"));
+        assert_eq!(entries[0].refresh_token.as_deref(), Some("router-refresh"));
+        assert_eq!(entries[0].account_id.as_deref(), Some("router-account"));
+        assert_eq!(entries[0].plan_type.as_deref(), Some("team"));
+        assert_eq!(entries[0].email.as_deref(), Some("router@example.com"));
+        assert_eq!(entries[0].account_name.as_deref(), Some("9router Account"));
+        assert_eq!(entries[0].expires_at, Some(1_893_456_000));
+    }
+
+    #[test]
+    fn parses_nested_codex_token_exports() {
+        let cases = [
+            (
+                "AxonHub",
+                json!({
+                    "auth_mode": "oauth",
+                    "tokens": {
+                        "access_token": "axon-access",
+                        "refresh_token": "axon-refresh",
+                        "id_token": "axon-id"
+                    }
+                }),
+                "axon-access",
+                "axon-refresh",
+                None,
+                None,
+            ),
+            (
+                "codex.json",
+                json!({
+                    "auth_mode": "chatgpt",
+                    "tokens": {
+                        "access_token": "codex-access",
+                        "refresh_token": "codex-refresh",
+                        "id_token": "codex-id",
+                        "account_id": "codex-account"
+                    }
+                }),
+                "codex-access",
+                "codex-refresh",
+                Some("codex-account"),
+                None,
+            ),
+            (
+                "Codex-Manager",
+                json!({
+                    "tokens": {
+                        "access_token": "manager-access",
+                        "refresh_token": "manager-refresh",
+                        "id_token": "manager-id",
+                        "account_id": "manager-account"
+                    },
+                    "meta": {
+                        "label": "Manager Account",
+                        "chatgpt_account_id": "manager-meta-account"
+                    }
+                }),
+                "manager-access",
+                "manager-refresh",
+                Some("manager-account"),
+                Some("Manager Account"),
+            ),
+        ];
+
+        for (format_name, credentials, access_token, refresh_token, account_id, account_name) in
+            cases
+        {
+            let entries =
+                parse_admin_provider_oauth_batch_import_entries("codex", &credentials.to_string());
+            assert_eq!(entries.len(), 1, "{format_name}");
+            assert_eq!(
+                entries[0].access_token.as_deref(),
+                Some(access_token),
+                "{format_name}"
+            );
+            assert_eq!(
+                entries[0].refresh_token.as_deref(),
+                Some(refresh_token),
+                "{format_name}"
+            );
+            assert_eq!(
+                entries[0].account_id.as_deref(),
+                account_id,
+                "{format_name}"
+            );
+            assert_eq!(
+                entries[0].account_name.as_deref(),
+                account_name,
+                "{format_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_codex_fields_override_nested_export_fields() {
+        let entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!({
+                "accessToken": "root-access",
+                "refreshToken": "root-refresh",
+                "chatgptAccountId": "root-account",
+                "plan_type": null,
+                "tokens": {
+                    "access_token": "nested-access",
+                    "refresh_token": "nested-refresh",
+                    "account_id": "nested-account"
+                },
+                "providerSpecificData": {
+                    "chatgptPlanType": "PLUS"
+                }
+            })
+            .to_string(),
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].access_token.as_deref(), Some("root-access"));
+        assert_eq!(entries[0].refresh_token.as_deref(), Some("root-refresh"));
+        assert_eq!(entries[0].account_id.as_deref(), Some("root-account"));
+        assert_eq!(entries[0].plan_type.as_deref(), Some("plus"));
+    }
+
+    #[test]
+    fn parses_sub2api_export_without_type_marker() {
+        let entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!({
+                "exported_at": "2030-01-01T00:00:00Z",
+                "proxies": [],
+                "accounts": [{
+                    "name": "Sub2API Account",
+                    "platform": "openai",
+                    "type": "oauth",
+                    "plan_type": "team",
+                    "credentials": {
+                        "access_token": "sub2api-access",
+                        "refresh_token": "sub2api-refresh",
+                        "chatgpt_account_id": "sub2api-account",
+                        "chatgpt_user_id": "sub2api-user",
+                        "email": "sub2api@example.com",
+                        "expires_at": 2_100_000_000u64
+                    },
+                    "extra": {
+                        "email": "fallback@example.com"
+                    }
+                }]
+            })
+            .to_string(),
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].access_token.as_deref(), Some("sub2api-access"));
+        assert_eq!(entries[0].refresh_token.as_deref(), Some("sub2api-refresh"));
+        assert_eq!(entries[0].account_id.as_deref(), Some("sub2api-account"));
+        assert_eq!(entries[0].user_id.as_deref(), Some("sub2api-user"));
+        assert_eq!(entries[0].email.as_deref(), Some("sub2api@example.com"));
+        assert_eq!(entries[0].plan_type.as_deref(), Some("team"));
+        assert_eq!(entries[0].account_name.as_deref(), Some("Sub2API Account"));
+        assert_eq!(entries[0].expires_at, Some(2_100_000_000));
+    }
+
+    #[test]
+    fn expands_sub2api_exports_inside_multi_file_arrays() {
+        let entries = parse_admin_provider_oauth_batch_import_entries(
+            "codex",
+            &json!([
+                {
+                    "exported_at": "2030-01-01T00:00:00Z",
+                    "accounts": [{
+                        "name": "Sub2API Account",
+                        "platform": "openai",
+                        "credentials": {
+                            "access_token": "sub2api-access",
+                            "refresh_token": "sub2api-refresh"
+                        }
+                    }]
+                },
+                {
+                    "tokens": {
+                        "access_token": "codex-access",
+                        "refresh_token": "codex-refresh"
+                    }
+                }
+            ])
+            .to_string(),
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].access_token.as_deref(), Some("sub2api-access"));
+        assert_eq!(entries[1].access_token.as_deref(), Some("codex-access"));
     }
 
     #[test]
