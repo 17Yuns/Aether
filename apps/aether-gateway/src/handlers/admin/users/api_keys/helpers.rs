@@ -33,7 +33,10 @@ pub(super) fn build_admin_user_api_key_detail_payload(
     state: &AdminAppState<'_>,
     record: &aether_data::repository::auth::StoredAuthApiKeyExportRecord,
     is_locked: bool,
+    billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
+    let (effective_billing_multiplier, billing_multiplier_source) =
+        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -43,6 +46,8 @@ pub(super) fn build_admin_user_api_key_detail_payload(
         "total_requests": record.total_requests,
         "total_cost_usd": record.total_cost_usd,
         "billing_multiplier": record.billing_multiplier,
+        "effective_billing_multiplier": effective_billing_multiplier,
+        "billing_multiplier_source": billing_multiplier_source,
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "ip_rules": record.ip_rules,

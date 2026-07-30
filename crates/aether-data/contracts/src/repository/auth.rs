@@ -869,6 +869,22 @@ pub fn normalize_api_key_billing_multiplier(
     Ok(value)
 }
 
+pub fn normalize_optional_billing_multiplier(
+    value: Option<f64>,
+    field_name: &str,
+) -> Result<Option<f64>, crate::DataLayerError> {
+    value
+        .map(|value| {
+            if !value.is_finite() || !(0.0..=MAX_API_KEY_BILLING_MULTIPLIER).contains(&value) {
+                return Err(crate::DataLayerError::UnexpectedValue(format!(
+                    "{field_name} must be between 0 and {MAX_API_KEY_BILLING_MULTIPLIER}"
+                )));
+            }
+            Ok(value)
+        })
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;

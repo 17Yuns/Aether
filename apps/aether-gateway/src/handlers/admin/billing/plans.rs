@@ -172,6 +172,19 @@ fn validate_entitlements(value: &serde_json::Value) -> Result<(), String> {
                     }
                 }
             }
+            "billing_multiplier" => {
+                let multiplier = item
+                    .get("multiplier")
+                    .and_then(|value| value.as_f64())
+                    .ok_or_else(|| "billing_multiplier.multiplier is required".to_string())?;
+                aether_data_contracts::repository::auth::normalize_optional_billing_multiplier(
+                    Some(multiplier),
+                    "billing_multiplier.multiplier",
+                )
+                .map_err(|_| {
+                    "billing_multiplier.multiplier must be between 0 and 1000".to_string()
+                })?;
+            }
             _ => return Err(format!("unsupported entitlement type: {kind}")),
         }
     }
@@ -390,5 +403,38 @@ pub(super) async fn maybe_build_local_admin_billing_plans_response(
             }
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_entitlements;
+    use serde_json::json;
+
+    #[test]
+    fn billing_multiplier_is_valid_for_every_package_shape() {
+        for package_entitlement in [
+            json!({"type": "daily_quota", "daily_quota_usd": 10.0}),
+            json!({"type": "membership_group", "grant_user_groups": ["pro"]}),
+        ] {
+            assert!(validate_entitlements(&json!([
+                {"type": "billing_multiplier", "multiplier": 0.75},
+                package_entitlement,
+            ]))
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn billing_multiplier_is_bounded_and_not_a_package_by_itself() {
+        assert!(validate_entitlements(&json!([
+            {"type": "billing_multiplier", "multiplier": 1000.01},
+            {"type": "daily_quota", "daily_quota_usd": 10.0},
+        ]))
+        .is_err());
+        assert!(validate_entitlements(&json!([
+            {"type": "billing_multiplier", "multiplier": 0.5},
+        ]))
+        .is_err());
     }
 }

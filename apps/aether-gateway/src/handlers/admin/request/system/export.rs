@@ -236,6 +236,8 @@ impl<'a> AdminAppState<'a> {
                     "id": group.id.clone(),
                     "name": group.name.clone(),
                     "description": group.description.clone(),
+                    "priority": group.priority,
+                    "billing_multiplier": group.billing_multiplier,
                     "allowed_providers": group.allowed_providers.clone(),
                     "allowed_providers_mode": group.allowed_providers_mode.clone(),
                     "allowed_api_formats": group.allowed_api_formats.clone(),

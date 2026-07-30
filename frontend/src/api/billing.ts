@@ -72,10 +72,16 @@ export interface MembershipGroupEntitlement {
   grant_user_groups: string[]
 }
 
+export interface BillingMultiplierEntitlement {
+  type: 'billing_multiplier'
+  multiplier: number
+}
+
 export type BillingEntitlement =
   | WalletCreditEntitlement
   | DailyQuotaEntitlement
   | MembershipGroupEntitlement
+  | BillingMultiplierEntitlement
 
 export interface BillingPlan {
   id: string

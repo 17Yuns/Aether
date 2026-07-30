@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
     normalized_name TEXT NOT NULL,
     description TEXT,
     priority INTEGER NOT NULL DEFAULT 0,
+    billing_multiplier REAL,
     allowed_providers TEXT,
     allowed_providers_mode TEXT NOT NULL DEFAULT 'inherit',
     allowed_api_formats TEXT,

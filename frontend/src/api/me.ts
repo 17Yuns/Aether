@@ -181,6 +181,8 @@ export interface ApiKey {
   total_requests?: number
   total_cost_usd?: number
   billing_multiplier?: number
+  effective_billing_multiplier?: number
+  billing_multiplier_source?: 'plan' | 'group' | 'api_key'
   rate_limit?: number | null
   concurrent_limit?: number | null
   ip_rules?: string[] | null

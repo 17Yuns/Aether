@@ -34,6 +34,15 @@ pub(crate) async fn build_admin_list_user_api_keys_response(
     if let Some(is_active) = active_filter {
         export_records.retain(|record| record.is_active == is_active);
     }
+    let billing_override = state
+        .app()
+        .data
+        .resolve_user_billing_multiplier_override(
+            &user_id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
 
     let snapshot_ids = export_records
         .iter()
@@ -49,6 +58,8 @@ pub(crate) async fn build_admin_list_user_api_keys_response(
     let api_keys = export_records
         .into_iter()
         .map(|record| {
+            let (effective_billing_multiplier, billing_multiplier_source) =
+                billing_override.unwrap_or((record.billing_multiplier, "api_key"));
             let is_locked = snapshot_by_id
                 .get(&record.api_key_id)
                 .map(|snapshot| snapshot.api_key_is_locked)
@@ -62,6 +73,8 @@ pub(crate) async fn build_admin_list_user_api_keys_response(
                 "total_requests": record.total_requests,
                 "total_cost_usd": record.total_cost_usd,
                 "billing_multiplier": record.billing_multiplier,
+                "effective_billing_multiplier": effective_billing_multiplier,
+                "billing_multiplier_source": billing_multiplier_source,
                 "rate_limit": record.rate_limit,
                 "concurrent_limit": record.concurrent_limit,
                 "feature_settings": record.feature_settings,

@@ -22,6 +22,10 @@ struct AdminUserGroupPayload {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    priority: i32,
+    #[serde(default)]
+    billing_multiplier: Option<f64>,
+    #[serde(default)]
     allowed_providers: Option<Vec<String>>,
     #[serde(default = "default_list_mode")]
     allowed_providers_mode: String,
@@ -370,6 +374,11 @@ fn parse_group_record(
     if payload.rate_limit.is_some_and(|value| value < 0) {
         return Err("rate_limit 必须大于等于 0".to_string());
     }
+    let billing_multiplier = aether_data::repository::auth::normalize_optional_billing_multiplier(
+        payload.billing_multiplier,
+        "user_groups.billing_multiplier",
+    )
+    .map_err(|_| "billing_multiplier 必须在 0 到 1000 之间".to_string())?;
     let allowed_providers =
         normalize_admin_user_string_list(payload.allowed_providers, "allowed_providers")?;
     let allowed_api_formats = normalize_admin_user_api_formats(payload.allowed_api_formats)?;
@@ -381,7 +390,8 @@ fn parse_group_record(
             .description
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
-        priority: 0,
+        priority: payload.priority,
+        billing_multiplier,
         allowed_providers,
         allowed_providers_mode: normalize_list_mode(&payload.allowed_providers_mode)?,
         allowed_api_formats,
@@ -412,6 +422,8 @@ fn user_group_payload(
         "name": group.name,
         "normalized_name": group.normalized_name,
         "description": group.description,
+        "priority": group.priority,
+        "billing_multiplier": group.billing_multiplier,
         "allowed_providers": group.allowed_providers,
         "allowed_providers_mode": group.allowed_providers_mode,
         "allowed_api_formats": group.allowed_api_formats,

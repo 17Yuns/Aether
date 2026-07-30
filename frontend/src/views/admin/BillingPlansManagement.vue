@@ -629,6 +629,33 @@
             权益配置
           </h3>
 
+          <div class="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <Label class="text-sm font-medium">套餐计费倍率</Label>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  启用后优先于用户组和 API Key 倍率，套餐到期后自动恢复继承
+                </p>
+              </div>
+              <Switch v-model="form.billing_multiplier_enabled" />
+            </div>
+            <div
+              v-if="form.billing_multiplier_enabled"
+              class="max-w-xs space-y-1.5"
+            >
+              <Label for="plan-billing-multiplier">计费倍率</Label>
+              <Input
+                id="plan-billing-multiplier"
+                v-model.number="form.billing_multiplier"
+                type="number"
+                min="0"
+                max="1000"
+                step="0.01"
+                @blur="normalizeBillingMultiplier"
+              />
+            </div>
+          </div>
+
           <div
             v-if="showWalletCreditConfig"
             class="space-y-3 rounded-2xl border border-border/60 bg-muted/20 p-4"
@@ -810,6 +837,7 @@ import {
   adminBillingPlansApi,
   type BillingDurationUnit,
   type BillingEntitlement,
+  type BillingMultiplierEntitlement,
   type BillingPlan,
   type BillingPurchaseLimitScope,
   type BillingPlanWriteRequest,
@@ -875,6 +903,8 @@ interface PlanFormState {
   sort_order: number
   max_active_per_user: number
   purchase_limit_scope: BillingPurchaseLimitScope
+  billing_multiplier_enabled: boolean
+  billing_multiplier: number
   wallet_credit_enabled: boolean
   wallet_credit_amount_usd: number
   wallet_credit_balance_bucket: WalletCreditBucket
@@ -1129,6 +1159,8 @@ function buildDefaultForm(): PlanFormState {
     sort_order: 0,
     max_active_per_user: 1,
     purchase_limit_scope: 'active_period',
+    billing_multiplier_enabled: false,
+    billing_multiplier: 1,
     wallet_credit_enabled: false,
     wallet_credit_amount_usd: 10,
     wallet_credit_balance_bucket: 'recharge',
@@ -1198,7 +1230,11 @@ function formFromPlan(plan: BillingPlan): PlanFormState {
   next.purchase_limit_scope = plan.purchase_limit_scope || 'active_period'
 
   for (const entitlement of plan.entitlements || []) {
-    if (entitlement.type === 'wallet_credit') {
+    if (entitlement.type === 'billing_multiplier') {
+      const multiplier = entitlement as BillingMultiplierEntitlement
+      next.billing_multiplier_enabled = true
+      next.billing_multiplier = Number(multiplier.multiplier)
+    } else if (entitlement.type === 'wallet_credit') {
       const wallet = entitlement as WalletCreditEntitlement
       next.wallet_credit_enabled = true
       next.wallet_credit_amount_usd = Number(wallet.amount_usd || next.wallet_credit_amount_usd)
@@ -1247,6 +1283,12 @@ function applyTemplate(template: TemplateKey) {
 
 function buildEntitlements(): BillingEntitlement[] {
   const entitlements: BillingEntitlement[] = []
+  if (form.billing_multiplier_enabled) {
+    entitlements.push({
+      type: 'billing_multiplier',
+      multiplier: Number(form.billing_multiplier),
+    })
+  }
   if (form.wallet_credit_enabled) {
     entitlements.push({
       type: 'wallet_credit',
@@ -1278,6 +1320,12 @@ function normalizePriceAmount() {
   form.price_amount = Number(value.toFixed(2))
 }
 
+function normalizeBillingMultiplier() {
+  const value = Number(form.billing_multiplier)
+  if (!Number.isFinite(value) || value < 0 || value > 1000) return
+  form.billing_multiplier = Number(value.toFixed(4))
+}
+
 function normalizeDurationValue() {
   const value = Number(form.duration_value)
   if (!Number.isFinite(value) || value <= 0) return
@@ -1306,6 +1354,12 @@ function validatePlan(entitlements: BillingEntitlement[]): string | null {
   if (form.wallet_credit_enabled && Number(form.wallet_credit_amount_usd) <= 0) return '附赠余额金额必须大于 0'
   if (form.daily_quota_enabled && Number(form.daily_quota_usd) <= 0) return '每日额度必须大于 0'
   if (form.membership_group_enabled && form.grant_user_groups.length === 0) return '会员分组权益至少选择一个分组'
+  if (
+    form.billing_multiplier_enabled
+    && (!Number.isFinite(Number(form.billing_multiplier))
+      || Number(form.billing_multiplier) < 0
+      || Number(form.billing_multiplier) > 1000)
+  ) return '套餐计费倍率必须在 0 到 1000 之间'
   return null
 }
 
@@ -1458,6 +1512,9 @@ function entitlementBadges(plan: BillingPlan): string[] {
     if (entitlement.type === 'membership_group') {
       const groups = entitlement.grant_user_groups.map(groupName).join(', ')
       return `会员组 ${groups}`
+    }
+    if (entitlement.type === 'billing_multiplier') {
+      return `计费 ${Number(entitlement.multiplier).toFixed(2)}x`
     }
     return entitlement.type
   })

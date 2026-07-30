@@ -1814,6 +1814,13 @@ impl GatewayDataState {
         snapshot.user_allowed_api_formats = allowed_api_formats;
         snapshot.user_allowed_models = allowed_models;
         snapshot.user_rate_limit = user_rate_limit;
+        if !snapshot.api_key_is_standalone {
+            snapshot.api_key_billing_multiplier = self
+                .active_plan_billing_multiplier_for_user(&snapshot.user_id, now_unix_secs)
+                .await?
+                .or_else(|| resolve_group_billing_multiplier(&groups))
+                .unwrap_or(snapshot.api_key_billing_multiplier);
+        }
         Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
             snapshot,
             now_unix_secs,
@@ -1909,6 +1916,94 @@ impl GatewayDataState {
         }
         Ok(group_ids.into_iter().collect())
     }
+
+    async fn active_plan_billing_multiplier_for_user(
+        &self,
+        user_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<f64>, DataLayerError> {
+        let Some(repository) = self.billing_reader.as_ref() else {
+            return Ok(None);
+        };
+        let Some(entitlements) = repository.list_user_plan_entitlements(user_id).await? else {
+            return Ok(None);
+        };
+
+        Ok(entitlements
+            .into_iter()
+            .filter(|entitlement| {
+                entitlement.status == "active"
+                    && entitlement.starts_at_unix_secs <= now_unix_secs
+                    && entitlement.expires_at_unix_secs > now_unix_secs
+            })
+            .filter_map(|entitlement| {
+                let multiplier = billing_multiplier_from_entitlement_snapshot(
+                    &entitlement.entitlements_snapshot,
+                )?;
+                Some((
+                    entitlement.starts_at_unix_secs,
+                    entitlement.created_at_unix_secs,
+                    entitlement.id,
+                    multiplier,
+                ))
+            })
+            .max_by(|left, right| {
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+                    .then_with(|| left.2.cmp(&right.2))
+            })
+            .map(|(_, _, _, multiplier)| multiplier))
+    }
+
+    pub(crate) async fn resolve_user_billing_multiplier_override(
+        &self,
+        user_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<(f64, &'static str)>, DataLayerError> {
+        if let Some(multiplier) = self
+            .active_plan_billing_multiplier_for_user(user_id, now_unix_secs)
+            .await?
+        {
+            return Ok(Some((multiplier, "plan")));
+        }
+        let groups = self.effective_user_groups_for_user(user_id).await?;
+        Ok(resolve_group_billing_multiplier(&groups).map(|multiplier| (multiplier, "group")))
+    }
+}
+
+fn billing_multiplier_from_entitlement_snapshot(snapshot: &serde_json::Value) -> Option<f64> {
+    snapshot.as_array()?.iter().find_map(|item| {
+        if item.get("type").and_then(serde_json::Value::as_str) != Some("billing_multiplier") {
+            return None;
+        }
+        let multiplier = item.get("multiplier").and_then(serde_json::Value::as_f64)?;
+        aether_data::repository::auth::normalize_optional_billing_multiplier(
+            Some(multiplier),
+            "billing_multiplier.multiplier",
+        )
+        .ok()
+        .flatten()
+    })
+}
+
+fn resolve_group_billing_multiplier(
+    groups: &[aether_data::repository::users::StoredUserGroup],
+) -> Option<f64> {
+    groups
+        .iter()
+        .filter_map(|group| {
+            group
+                .billing_multiplier
+                .map(|multiplier| (group.priority, &group.name, &group.id, multiplier))
+        })
+        .max_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| right.1.cmp(left.1))
+                .then_with(|| right.2.cmp(left.2))
+        })
+        .map(|(_, _, _, multiplier)| multiplier)
 }
 
 // Per-user list policy columns are retained only for legacy import/export compatibility.
@@ -2126,6 +2221,9 @@ mod tests {
         InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeyExportRecord,
         StoredAuthApiKeySnapshot,
     };
+    use aether_data::repository::billing::{
+        InMemoryBillingReadRepository, UserPlanEntitlementRecord,
+    };
     use aether_data::repository::users::{
         InMemoryUserReadRepository, StoredUserAuthRecord, StoredUserGroup, UpsertUserGroupRecord,
         UserReadRepository,
@@ -2202,6 +2300,7 @@ mod tests {
             normalized_name: id.to_string(),
             description: None,
             priority,
+            billing_multiplier: None,
             allowed_providers: None,
             allowed_providers_mode: "unrestricted".to_string(),
             allowed_api_formats: None,
@@ -2218,6 +2317,142 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    #[test]
+    fn group_billing_multiplier_prefers_the_highest_configured_priority() {
+        let mut fallback = sample_group("fallback", 100, None, "unrestricted", None, "system");
+        let mut standard = sample_group("standard", 10, None, "unrestricted", None, "system");
+        let mut premium = sample_group("premium", 20, None, "unrestricted", None, "system");
+        fallback.billing_multiplier = None;
+        standard.billing_multiplier = Some(1.25);
+        premium.billing_multiplier = Some(0.6);
+
+        assert_eq!(
+            resolve_group_billing_multiplier(&[fallback, standard, premium]),
+            Some(0.6)
+        );
+    }
+
+    #[tokio::test]
+    async fn active_plan_billing_multiplier_overrides_group_and_api_key() {
+        let now = chrono::Utc::now().timestamp().max(100) as u64;
+        let mut snapshot = sample_snapshot("key-1", "user-1")
+            .with_api_key_billing_multiplier(Some(1.5))
+            .expect("key multiplier should build");
+        snapshot.api_key_is_standalone = false;
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-1".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("user-1", "user"),
+        ]));
+        let group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Pro".to_string(),
+                description: None,
+                priority: 50,
+                billing_multiplier: Some(0.8),
+                allowed_providers: None,
+                allowed_providers_mode: "unrestricted".to_string(),
+                allowed_api_formats: None,
+                allowed_api_formats_mode: "unrestricted".to_string(),
+                allowed_models: None,
+                allowed_models_mode: "unrestricted".to_string(),
+                rate_limit: None,
+                rate_limit_mode: "system".to_string(),
+            })
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+        user_repository
+            .add_user_to_group(&group.id, "user-1")
+            .await
+            .expect("membership should create");
+
+        let group_state =
+            GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository.clone())
+                .with_user_reader(user_repository.clone());
+        let group_resolved = group_state
+            .read_auth_api_key_snapshot_by_key_hash("hash-1", now)
+            .await
+            .expect("group snapshot should resolve")
+            .expect("group snapshot should exist");
+        assert_eq!(group_resolved.api_key_billing_multiplier, 0.8);
+
+        let moved_group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Enterprise".to_string(),
+                description: None,
+                priority: 60,
+                billing_multiplier: Some(1.2),
+                allowed_providers: None,
+                allowed_providers_mode: "unrestricted".to_string(),
+                allowed_api_formats: None,
+                allowed_api_formats_mode: "unrestricted".to_string(),
+                allowed_models: None,
+                allowed_models_mode: "unrestricted".to_string(),
+                rate_limit: None,
+                rate_limit_mode: "system".to_string(),
+            })
+            .await
+            .expect("moved group should create")
+            .expect("moved group should exist");
+        user_repository
+            .replace_user_groups_for_user("user-1", &[moved_group.id])
+            .await
+            .expect("group move should succeed");
+        let moved_resolved = group_state
+            .read_auth_api_key_snapshot_by_key_hash("hash-1", now)
+            .await
+            .expect("moved snapshot should resolve")
+            .expect("moved snapshot should exist");
+        assert_eq!(moved_resolved.api_key_billing_multiplier, 1.2);
+
+        let billing_repository = Arc::new(
+            InMemoryBillingReadRepository::default().with_plan_entitlements([
+                UserPlanEntitlementRecord {
+                    id: "older".to_string(),
+                    user_id: "user-1".to_string(),
+                    plan_id: "daily".to_string(),
+                    payment_order_id: "order-1".to_string(),
+                    status: "active".to_string(),
+                    starts_at_unix_secs: now - 20,
+                    expires_at_unix_secs: now + 100,
+                    entitlements_snapshot: serde_json::json!([
+                        {"type": "billing_multiplier", "multiplier": 0.7},
+                        {"type": "daily_quota", "daily_quota_usd": 10.0}
+                    ]),
+                    created_at_unix_secs: now - 20,
+                    updated_at_unix_secs: now - 20,
+                },
+                UserPlanEntitlementRecord {
+                    id: "newer".to_string(),
+                    user_id: "user-1".to_string(),
+                    plan_id: "membership".to_string(),
+                    payment_order_id: "order-2".to_string(),
+                    status: "active".to_string(),
+                    starts_at_unix_secs: now - 10,
+                    expires_at_unix_secs: now + 100,
+                    entitlements_snapshot: serde_json::json!([
+                        {"type": "billing_multiplier", "multiplier": 0.5},
+                        {"type": "membership_group", "grant_user_groups": ["pro"]}
+                    ]),
+                    created_at_unix_secs: now - 10,
+                    updated_at_unix_secs: now - 10,
+                },
+            ]),
+        );
+        let plan_state = GatewayDataState::with_billing_reader_for_tests(billing_repository)
+            .with_auth_api_key_reader(auth_repository)
+            .with_user_reader(user_repository);
+        let plan_resolved = plan_state
+            .read_auth_api_key_snapshot_by_key_hash("hash-1", now)
+            .await
+            .expect("plan snapshot should resolve")
+            .expect("plan snapshot should exist");
+        assert_eq!(plan_resolved.api_key_billing_multiplier, 0.5);
     }
 
     #[test]
@@ -2477,6 +2712,7 @@ mod tests {
                 name: "Restricted".to_string(),
                 description: None,
                 priority: 10,
+                billing_multiplier: None,
                 allowed_providers: Some(vec!["openai".to_string()]),
                 allowed_providers_mode: "specific".to_string(),
                 allowed_api_formats: Some(vec!["openai:chat".to_string()]),
@@ -2594,6 +2830,7 @@ mod tests {
                 name: "Group Policy".to_string(),
                 description: None,
                 priority: 10,
+                billing_multiplier: None,
                 allowed_providers: Some(vec!["anthropic".to_string()]),
                 allowed_providers_mode: "specific".to_string(),
                 allowed_api_formats: Some(vec!["claude:messages".to_string()]),
@@ -2667,6 +2904,7 @@ mod tests {
                 name: "Responses".to_string(),
                 description: None,
                 priority: 10,
+                billing_multiplier: None,
                 allowed_providers: None,
                 allowed_providers_mode: "unrestricted".to_string(),
                 allowed_api_formats: Some(vec!["openai:responses".to_string()]),

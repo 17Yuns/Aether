@@ -167,6 +167,8 @@ export interface UserGroup {
   name: string
   normalized_name?: string
   description?: string | null
+  priority: number
+  billing_multiplier?: number | null
   allowed_providers?: string[] | null
   allowed_providers_mode: ListPolicyMode
   allowed_api_formats?: string[] | null
@@ -183,6 +185,8 @@ export interface UserGroup {
 export interface UpsertUserGroupRequest {
   name: string
   description?: string | null
+  priority?: number
+  billing_multiplier?: number | null
   allowed_providers?: string[] | null
   allowed_providers_mode?: ListPolicyMode
   allowed_api_formats?: string[] | null
@@ -224,6 +228,8 @@ export interface ApiKey {
   rate_limit?: number | null  // 普通Key: 0 = 不限制，历史 null 视为跟随系统默认
   concurrent_limit?: number | null  // 普通Key: 0 = 不限制并发，历史 null 兼容
   billing_multiplier?: number
+  effective_billing_multiplier?: number
+  billing_multiplier_source?: 'plan' | 'group' | 'api_key'
   ip_rules?: string[] | null
   total_requests?: number  // 总请求数
   total_cost_usd?: number  // 总费用

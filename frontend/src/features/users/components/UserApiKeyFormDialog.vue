@@ -44,7 +44,7 @@
           for="admin-user-key-billing-multiplier"
           class="text-sm font-medium"
         >
-          {{ legacyT('计费倍率') }}
+          {{ legacyT('Key 基础倍率') }}
         </Label>
         <Input
           id="admin-user-key-billing-multiplier"
@@ -56,6 +56,9 @@
           class="h-10"
           @update:model-value="updateField('billing_multiplier', parseNumberInput($event, { allowFloat: true, min: 0, max: 1000 }) ?? 1)"
         />
+        <p class="text-xs text-muted-foreground">
+          {{ legacyT('存在套餐或分组倍率时，实际计费会按优先级覆盖此值') }}
+        </p>
       </div>
 
       <div class="space-y-2">

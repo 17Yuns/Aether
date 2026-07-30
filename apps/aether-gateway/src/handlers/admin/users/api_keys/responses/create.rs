@@ -218,6 +218,17 @@ pub(crate) async fn build_admin_create_user_api_key_response(
     } else {
         created
     };
+    let billing_override = state
+        .app()
+        .data
+        .resolve_user_billing_multiplier_override(
+            &target_user_id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let (effective_billing_multiplier, billing_multiplier_source) =
+        billing_override.unwrap_or((created.billing_multiplier, "api_key"));
 
     Ok(attach_audit_response(
         Json(json!({
@@ -228,6 +239,8 @@ pub(crate) async fn build_admin_create_user_api_key_response(
             "rate_limit": created.rate_limit,
             "concurrent_limit": created.concurrent_limit,
             "billing_multiplier": created.billing_multiplier,
+            "effective_billing_multiplier": effective_billing_multiplier,
+            "billing_multiplier_source": billing_multiplier_source,
             "ip_rules": created.ip_rules,
             "expires_at": format_optional_unix_secs_iso8601(created.expires_at_unix_secs),
             "last_used_at": format_optional_unix_secs_iso8601(created.last_used_at_unix_secs),

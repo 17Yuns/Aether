@@ -165,7 +165,17 @@ pub(crate) async fn build_admin_update_user_api_key_response(
         .find(|snapshot| snapshot.api_key_id == api_key_id)
         .map(|snapshot| snapshot.api_key_is_locked)
         .unwrap_or(false);
-    let mut payload = build_admin_user_api_key_detail_payload(state, &updated, is_locked);
+    let billing_override = state
+        .app()
+        .data
+        .resolve_user_billing_multiplier_override(
+            &user_id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let mut payload =
+        build_admin_user_api_key_detail_payload(state, &updated, is_locked, billing_override);
     payload["message"] = json!("API Key更新成功");
     Ok(attach_audit_response(
         Json(payload).into_response(),

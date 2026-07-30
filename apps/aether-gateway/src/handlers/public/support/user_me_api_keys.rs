@@ -155,7 +155,10 @@ fn build_users_me_api_key_list_payload(
     state: &AppState,
     record: &aether_data::repository::auth::StoredAuthApiKeyExportRecord,
     is_locked: bool,
+    billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
+    let (effective_billing_multiplier, billing_multiplier_source) =
+        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -167,6 +170,8 @@ fn build_users_me_api_key_list_payload(
         "total_requests": record.total_requests,
         "total_cost_usd": record.total_cost_usd,
         "billing_multiplier": record.billing_multiplier,
+        "effective_billing_multiplier": effective_billing_multiplier,
+        "billing_multiplier_source": billing_multiplier_source,
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "allowed_providers": record.allowed_providers,
@@ -180,7 +185,10 @@ fn build_users_me_api_key_detail_payload(
     state: &AppState,
     record: &aether_data::repository::auth::StoredAuthApiKeyExportRecord,
     is_locked: bool,
+    billing_override: Option<(f64, &'static str)>,
 ) -> serde_json::Value {
+    let (effective_billing_multiplier, billing_multiplier_source) =
+        billing_override.unwrap_or((record.billing_multiplier, "api_key"));
     json!({
         "id": record.api_key_id,
         "name": record.name,
@@ -192,6 +200,8 @@ fn build_users_me_api_key_detail_payload(
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
         "billing_multiplier": record.billing_multiplier,
+        "effective_billing_multiplier": effective_billing_multiplier,
+        "billing_multiplier_source": billing_multiplier_source,
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(record.last_used_at_unix_secs),
@@ -323,6 +333,23 @@ pub(super) async fn handle_users_me_api_keys_get(
     };
     records.retain(|record| !record.is_standalone);
     records.sort_by(|left, right| left.api_key_id.cmp(&right.api_key_id));
+    let billing_override = match state
+        .data
+        .resolve_user_billing_multiplier_override(
+            &auth.user.id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            return build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("user billing multiplier lookup failed: {err:?}"),
+                false,
+            )
+        }
+    };
 
     let snapshot_ids = records
         .iter()
@@ -354,7 +381,7 @@ pub(super) async fn handle_users_me_api_keys_get(
                     .get(&record.api_key_id)
                     .map(|snapshot| snapshot.api_key_is_locked)
                     .unwrap_or(false);
-                build_users_me_api_key_list_payload(state, record, is_locked)
+                build_users_me_api_key_list_payload(state, record, is_locked, billing_override)
             })
             .collect::<Vec<_>>(),
     )
@@ -398,6 +425,23 @@ pub(super) async fn handle_users_me_api_key_detail_get(
         .find(|record| !record.is_standalone && record.api_key_id == api_key_id)
     else {
         return build_auth_error_response(http::StatusCode::NOT_FOUND, "API密钥不存在", false);
+    };
+    let billing_override = match state
+        .data
+        .resolve_user_billing_multiplier_override(
+            &auth.user.id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            return build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("user billing multiplier lookup failed: {err:?}"),
+                false,
+            )
+        }
     };
 
     if include_key {
@@ -448,7 +492,10 @@ pub(super) async fn handle_users_me_api_key_detail_get(
     };
 
     Json(build_users_me_api_key_detail_payload(
-        state, &record, is_locked,
+        state,
+        &record,
+        is_locked,
+        billing_override,
     ))
     .into_response()
 }
@@ -629,6 +676,25 @@ pub(super) async fn handle_users_me_api_key_create(
     } else {
         created
     };
+    let billing_override = match state
+        .data
+        .resolve_user_billing_multiplier_override(
+            &auth.user.id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            return build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("user billing multiplier lookup failed: {err:?}"),
+                false,
+            )
+        }
+    };
+    let (effective_billing_multiplier, billing_multiplier_source) =
+        billing_override.unwrap_or((created.billing_multiplier, "api_key"));
 
     Json(json!({
         "id": created.api_key_id,
@@ -640,6 +706,8 @@ pub(super) async fn handle_users_me_api_key_create(
         "rate_limit": created.rate_limit,
         "concurrent_limit": created.concurrent_limit,
         "billing_multiplier": created.billing_multiplier,
+        "effective_billing_multiplier": effective_billing_multiplier,
+        "billing_multiplier_source": billing_multiplier_source,
         "ip_rules": created.ip_rules,
         "feature_settings": created.feature_settings,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(created.last_used_at_unix_secs),
@@ -779,8 +847,29 @@ pub(super) async fn handle_users_me_api_key_update(
         updated
     };
 
-    let mut payload =
-        build_users_me_api_key_detail_payload(state, &updated, snapshot.api_key_is_locked);
+    let billing_override = match state
+        .data
+        .resolve_user_billing_multiplier_override(
+            &auth.user.id,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            return build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("user billing multiplier lookup failed: {err:?}"),
+                false,
+            )
+        }
+    };
+    let mut payload = build_users_me_api_key_detail_payload(
+        state,
+        &updated,
+        snapshot.api_key_is_locked,
+        billing_override,
+    );
     payload["message"] = json!("API密钥已更新");
     Json(payload).into_response()
 }

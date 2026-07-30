@@ -603,6 +603,7 @@ async fn gateway_allows_default_user_group_access_policy_updates() {
             name: "Baseline".to_string(),
             description: None,
             priority: 0,
+            billing_multiplier: None,
             allowed_providers: Some(vec!["openai".to_string()]),
             allowed_providers_mode: "specific".to_string(),
             allowed_api_formats: Some(vec!["openai:chat".to_string()]),
@@ -668,7 +669,9 @@ async fn gateway_allows_default_user_group_access_policy_updates() {
             "allowed_models": ["gpt-4.1", "claude-sonnet-4-5"],
             "allowed_models_mode": "specific",
             "rate_limit": 25,
-            "rate_limit_mode": "custom"
+            "rate_limit_mode": "custom",
+            "priority": 20,
+            "billing_multiplier": 0.75
         }))
         .send()
         .await
@@ -685,6 +688,8 @@ async fn gateway_allows_default_user_group_access_policy_updates() {
         json!(["gpt-4.1", "claude-sonnet-4-5"])
     );
     assert_eq!(update_payload["rate_limit"], 25);
+    assert_eq!(update_payload["priority"], 20);
+    assert_eq!(update_payload["billing_multiplier"], 0.75);
 
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -715,6 +720,7 @@ async fn gateway_allows_removing_default_group_members_when_other_group_remains(
             name: "Default".to_string(),
             description: None,
             priority: 0,
+            billing_multiplier: None,
             allowed_providers: None,
             allowed_providers_mode: "unrestricted".to_string(),
             allowed_api_formats: None,
@@ -732,6 +738,7 @@ async fn gateway_allows_removing_default_group_members_when_other_group_remains(
             name: "Team".to_string(),
             description: None,
             priority: 0,
+            billing_multiplier: None,
             allowed_providers: None,
             allowed_providers_mode: "unrestricted".to_string(),
             allowed_api_formats: None,
@@ -1697,6 +1704,7 @@ async fn admin_created_user_keys_inherit_owner_group_policy() {
             name: "Admin OpenAI".to_string(),
             description: None,
             priority: 10,
+            billing_multiplier: None,
             allowed_providers: Some(vec!["openai".to_string()]),
             allowed_providers_mode: "specific".to_string(),
             allowed_api_formats: Some(vec!["openai:responses".to_string()]),
@@ -1719,6 +1727,7 @@ async fn admin_created_user_keys_inherit_owner_group_policy() {
             name: "Target Claude".to_string(),
             description: None,
             priority: 10,
+            billing_multiplier: None,
             allowed_providers: Some(vec!["anthropic".to_string()]),
             allowed_providers_mode: "specific".to_string(),
             allowed_api_formats: Some(vec!["claude:messages".to_string()]),
@@ -1806,6 +1815,7 @@ async fn admin_created_user_keys_inherit_owner_group_policy() {
                 name: "Target Gemini".to_string(),
                 description: None,
                 priority: 10,
+                billing_multiplier: None,
                 allowed_providers: Some(vec!["google".to_string()]),
                 allowed_providers_mode: "specific".to_string(),
                 allowed_api_formats: Some(vec!["gemini:generate-content".to_string()]),
@@ -2128,6 +2138,7 @@ async fn gateway_allows_admin_update_user_to_clear_explicit_groups() {
             name: "GPT Adapt".to_string(),
             description: None,
             priority: 0,
+            billing_multiplier: None,
             allowed_providers: None,
             allowed_providers_mode: "unrestricted".to_string(),
             allowed_api_formats: None,

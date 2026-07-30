@@ -567,6 +567,9 @@ function entitlementLabels(items: BillingEntitlement[] | undefined): string[] {
     if (item.type === 'membership_group') {
       return legacyT('会员权益')
     }
+    if (item.type === 'billing_multiplier') {
+      return `${legacyT('计费倍率')} ${Number(item.multiplier).toFixed(2)}x`
+    }
     return item.type
   })
 }

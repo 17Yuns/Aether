@@ -459,6 +459,9 @@ function entitlementLabels(items: BillingEntitlement[]): string[] {
     if (item.type === 'membership_group') {
       return `会员组 ${item.grant_user_groups.join(', ')}`
     }
+    if (item.type === 'billing_multiplier') {
+      return `计费 ${Number(item.multiplier).toFixed(2)}x`
+    }
     return item.type
   })
 }

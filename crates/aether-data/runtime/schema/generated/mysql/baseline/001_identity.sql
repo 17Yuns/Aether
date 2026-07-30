@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
     `normalized_name` VARCHAR(100) NOT NULL,
     `description` LONGTEXT,
     `priority` INT NOT NULL DEFAULT 0,
+    `billing_multiplier` DOUBLE,
     `allowed_providers` JSON,
     `allowed_providers_mode` VARCHAR(32) NOT NULL DEFAULT 'inherit',
     `allowed_api_formats` JSON,

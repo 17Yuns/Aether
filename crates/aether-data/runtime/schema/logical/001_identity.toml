@@ -193,6 +193,11 @@ type = "int32"
 default = 0
 
 [[table.user_groups.columns]]
+name = "billing_multiplier"
+type = "float64"
+nullable = true
+
+[[table.user_groups.columns]]
 name = "allowed_providers"
 type = "json"
 nullable = true

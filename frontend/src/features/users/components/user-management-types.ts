@@ -18,6 +18,8 @@ export interface UserSelectOption {
 
 export interface UserGroupFormState {
   name: string
+  priority: number
+  billing_multiplier: number | undefined
   allowed_providers_mode: ListPolicyMode
   allowed_api_formats_mode: ListPolicyMode
   allowed_models_mode: ListPolicyMode

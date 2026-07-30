@@ -282,6 +282,7 @@ fn memory_group_from_record(
         name.to_ascii_lowercase(),
         record.description,
         record.priority,
+        record.billing_multiplier,
         record.allowed_providers.map(serde_json::Value::from),
         record.allowed_providers_mode,
         record.allowed_api_formats.map(serde_json::Value::from),
@@ -304,6 +305,7 @@ fn memory_update_group_from_record(
     group.normalized_name = name.to_ascii_lowercase();
     group.description = record.description;
     group.priority = record.priority;
+    group.billing_multiplier = record.billing_multiplier;
     group.allowed_providers = record.allowed_providers;
     group.allowed_providers_mode = record.allowed_providers_mode;
     group.allowed_api_formats = record.allowed_api_formats;
@@ -319,6 +321,7 @@ fn memory_update_group_from_record(
         group.normalized_name,
         group.description,
         group.priority,
+        group.billing_multiplier,
         group.allowed_providers.map(serde_json::Value::from),
         group.allowed_providers_mode,
         group.allowed_api_formats.map(serde_json::Value::from),

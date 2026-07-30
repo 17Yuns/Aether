@@ -151,6 +151,7 @@ SELECT
   normalized_name,
   description,
   priority,
+  billing_multiplier,
   allowed_providers,
   allowed_providers_mode,
   allowed_api_formats,
@@ -476,13 +477,13 @@ WHERE is_deleted = 0
         let result = sqlx::query(
             r#"
 INSERT INTO user_groups (
-  id, name, normalized_name, description, priority,
+  id, name, normalized_name, description, priority, billing_multiplier,
   allowed_providers, allowed_providers_mode,
   allowed_api_formats, allowed_api_formats_mode,
   allowed_models, allowed_models_mode,
   rate_limit, rate_limit_mode, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(&id)
@@ -490,6 +491,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         .bind(normalized_name)
         .bind(record.description)
         .bind(record.priority)
+        .bind(record.billing_multiplier)
         .bind(json_string_from_option_vec(
             record.allowed_providers.as_ref(),
         ))
@@ -530,6 +532,7 @@ SET name = ?,
     normalized_name = ?,
     description = ?,
     priority = ?,
+    billing_multiplier = ?,
     allowed_providers = ?,
     allowed_providers_mode = ?,
     allowed_api_formats = ?,
@@ -546,6 +549,7 @@ WHERE id = ?
         .bind(normalized_name)
         .bind(record.description)
         .bind(record.priority)
+        .bind(record.billing_multiplier)
         .bind(json_string_from_option_vec(
             record.allowed_providers.as_ref(),
         ))
@@ -2020,6 +2024,7 @@ fn map_user_group_row(row: &SqliteRow) -> Result<StoredUserGroup, DataLayerError
         row.try_get("normalized_name").map_sql_err()?,
         row.try_get("description").map_sql_err()?,
         row.try_get("priority").map_sql_err()?,
+        row.try_get("billing_multiplier").map_sql_err()?,
         optional_json_from_string(
             row.try_get("allowed_providers").map_sql_err()?,
             "user_groups.allowed_providers",

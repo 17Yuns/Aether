@@ -981,6 +981,12 @@ fn build_imported_user_group_record(
         return Err(format!("{field_name}.name 不能为空"));
     }
     let description = imported_optional_string(group.get("description"))?;
+    let priority = imported_optional_i32(group.get("priority"), "priority")?.unwrap_or(0);
+    let billing_multiplier = aether_data::repository::auth::normalize_optional_billing_multiplier(
+        imported_optional_f64(group.get("billing_multiplier"), "billing_multiplier")?,
+        "user_groups.billing_multiplier",
+    )
+    .map_err(|_| "billing_multiplier 必须在 0 到 1000 之间".to_string())?;
     let allowed_providers = normalize_imported_user_string_list(group, "allowed_providers")?;
     let allowed_api_formats = normalize_imported_user_api_formats(group, "allowed_api_formats")?;
     let allowed_models = normalize_imported_user_string_list(group, "allowed_models")?;
@@ -1037,7 +1043,8 @@ fn build_imported_user_group_record(
         aether_data::repository::users::UpsertUserGroupRecord {
             name,
             description,
-            priority: 0,
+            priority,
+            billing_multiplier,
             allowed_providers,
             allowed_providers_mode,
             allowed_api_formats,
@@ -3561,9 +3568,10 @@ mod tests {
         assert!(validate_imported_system_users_export_version(Some(&json!("1.4"))).is_ok());
         assert!(validate_imported_system_users_export_version(Some(&json!("1.5"))).is_ok());
         assert!(validate_imported_system_users_export_version(Some(&json!("1.6"))).is_ok());
+        assert!(validate_imported_system_users_export_version(Some(&json!("1.7"))).is_ok());
         assert_eq!(
             validate_imported_system_users_export_version(Some(&json!("2.2"))).unwrap_err(),
-            "不支持的用户数据版本: 2.2，支持的版本: 1.3, 1.4, 1.5, 1.6"
+            "不支持的用户数据版本: 2.2，支持的版本: 1.3, 1.4, 1.5, 1.6, 1.7"
         );
         assert_eq!(
             validate_imported_system_users_export_version(Some(&json!(null))).unwrap_err(),

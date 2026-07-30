@@ -913,6 +913,7 @@ mod tests {
             name: "Team".to_string(),
             description: None,
             priority: 0,
+            billing_multiplier: None,
             allowed_providers: None,
             allowed_providers_mode: "unrestricted".to_string(),
             allowed_api_formats: None,

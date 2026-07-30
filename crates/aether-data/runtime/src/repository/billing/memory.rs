@@ -44,6 +44,21 @@ impl InMemoryBillingReadRepository {
             entitlements_by_id: RwLock::new(BTreeMap::new()),
         }
     }
+
+    pub fn with_plan_entitlements<I>(self, items: I) -> Self
+    where
+        I: IntoIterator<Item = UserPlanEntitlementRecord>,
+    {
+        let mut entitlements = self
+            .entitlements_by_id
+            .write()
+            .expect("billing repository lock");
+        for item in items {
+            entitlements.insert(item.id.clone(), item);
+        }
+        drop(entitlements);
+        self
+    }
 }
 
 fn current_unix_secs() -> u64 {

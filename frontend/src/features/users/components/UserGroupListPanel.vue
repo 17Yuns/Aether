@@ -47,6 +47,12 @@
               {{ legacyT('默认') }}
             </Badge>
           </span>
+          <span
+            v-if="group.billing_multiplier !== null && group.billing_multiplier !== undefined"
+            class="mt-0.5 block text-[11px] tabular-nums text-muted-foreground"
+          >
+            {{ Number(group.billing_multiplier).toFixed(2) }}x · P{{ group.priority ?? 0 }}
+          </span>
         </span>
         <ChevronRight class="hidden h-4 w-4 shrink-0 text-muted-foreground lg:block" />
       </button>

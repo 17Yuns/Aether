@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS public.user_groups (
     normalized_name character varying(100) NOT NULL,
     description text,
     priority integer DEFAULT 0 NOT NULL,
+    billing_multiplier double precision,
     allowed_providers jsonb,
     allowed_providers_mode character varying(32) DEFAULT 'inherit' NOT NULL,
     allowed_api_formats jsonb,

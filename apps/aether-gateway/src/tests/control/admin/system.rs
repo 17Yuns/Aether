@@ -896,6 +896,7 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
             name: "Restricted GPT".to_string(),
             description: Some("GPT-only users".to_string()),
             priority: 10,
+            billing_multiplier: None,
             allowed_providers: Some(vec!["openai".to_string()]),
             allowed_providers_mode: "specific".to_string(),
             allowed_api_formats: Some(vec!["openai:chat".to_string()]),

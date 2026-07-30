@@ -28,10 +28,14 @@
         <div class="space-y-5">
           <UserGroupProfileFields
             :name="form.name"
+            :priority="form.priority"
+            :billing-multiplier="form.billing_multiplier"
             :member-user-ids="memberUserIds"
             :user-options="userOptions"
             :members-disabled="Boolean(selectedGroup?.is_default)"
             @update:name="form.name = $event"
+            @update:priority="form.priority = $event"
+            @update:billing-multiplier="form.billing_multiplier = $event"
             @update:member-user-ids="memberUserIds = $event"
           />
 
@@ -199,6 +203,8 @@ async function selectGroup(groupId: string): Promise<void> {
   editingGroupId.value = group.id
   form.value = {
     name: group.name,
+    priority: group.priority ?? 0,
+    billing_multiplier: group.billing_multiplier ?? undefined,
     allowed_providers_mode: normalizeListMode(group.allowed_providers_mode),
     allowed_api_formats_mode: normalizeListMode(group.allowed_api_formats_mode),
     allowed_models_mode: normalizeListMode(group.allowed_models_mode),
@@ -228,6 +234,8 @@ function normalizeRateMode(mode: RateLimitPolicyMode): RateLimitPolicyMode {
 function createEmptyForm(): UserGroupFormState {
   return {
     name: '',
+    priority: 0,
+    billing_multiplier: undefined,
     allowed_providers_mode: 'unrestricted',
     allowed_api_formats_mode: 'unrestricted',
     allowed_models_mode: 'unrestricted',
@@ -271,6 +279,8 @@ async function toggleDefault(): Promise<void> {
 function buildPayload(): UpsertUserGroupRequest {
   return {
     name: form.value.name.trim(),
+    priority: Math.trunc(Number(form.value.priority) || 0),
+    billing_multiplier: form.value.billing_multiplier ?? null,
     allowed_providers_mode: form.value.allowed_providers_mode,
     allowed_api_formats_mode: form.value.allowed_api_formats_mode,
     allowed_models_mode: form.value.allowed_models_mode,
@@ -292,6 +302,15 @@ function buildPayload(): UpsertUserGroupRequest {
 
 async function saveGroup(): Promise<void> {
   if (!form.value.name.trim()) return
+  if (
+    form.value.billing_multiplier !== undefined
+    && (!Number.isFinite(form.value.billing_multiplier)
+      || form.value.billing_multiplier < 0
+      || form.value.billing_multiplier > 1000)
+  ) {
+    error(legacyT('计费倍率必须在 0 到 1000 之间'))
+    return
+  }
   saving.value = true
   try {
     const saved = editingGroupId.value

@@ -72,7 +72,7 @@
                     variant="secondary"
                     class="text-xs"
                   >
-                    {{ formatBillingMultiplier(apiKey.billing_multiplier) }}
+                    {{ formatEffectiveBillingMultiplier(apiKey) }}
                   </Badge>
                 </div>
                 <div class="mt-0.5 flex items-center gap-1">
@@ -184,7 +184,7 @@ import { Badge, Button, Dialog } from '@/components/ui'
 import { useI18n } from '@/i18n'
 import type { ApiKey } from '@/api/users'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   apiKeys: ApiKey[]
   creating: boolean
@@ -204,4 +204,15 @@ defineEmits<{
 }>()
 
 const { legacyT } = useI18n()
+
+function formatEffectiveBillingMultiplier(apiKey: ApiKey): string {
+  const sourceLabels = {
+    plan: legacyT('套餐'),
+    group: legacyT('分组'),
+    api_key: 'Key',
+  }
+  const source = apiKey.billing_multiplier_source || 'api_key'
+  const value = apiKey.effective_billing_multiplier ?? apiKey.billing_multiplier
+  return `${props.formatBillingMultiplier(value)} · ${sourceLabels[source]}`
+}
 </script>
