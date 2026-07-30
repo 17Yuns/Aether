@@ -5,7 +5,7 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 
 use aether_data_contracts::repository::proxy_nodes::{
     bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
-    normalize_proxy_metadata, preserve_proxy_metadata_tunnel_security,
+    normalize_proxy_metadata, prepare_proxy_node_heartbeat,
     reconcile_remote_config_after_heartbeat, ProxyNodeEventQuery, ProxyNodeHeartbeatMutation,
     ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeMetricsCleanupSummary,
     ProxyNodeMetricsStep, ProxyNodeReadRepository, ProxyNodeRegistrationMutation,
@@ -124,7 +124,17 @@ SET
   dns_failures = dns_failures + GREATEST(COALESCE($8, 0), 0),
   stream_errors = stream_errors + GREATEST(COALESCE($9, 0), 0)
 WHERE id = $1
+  AND (
+    $10::bigint IS NULL
+    OR CASE
+      WHEN json_typeof(proxy_metadata->'_heartbeat_revision') = 'number'
+        THEN (proxy_metadata->'_heartbeat_revision')::jsonb
+      ELSE '0'::jsonb
+    END = to_jsonb($10::bigint)
+  )
 "#;
+
+const HEARTBEAT_UPDATE_MAX_ATTEMPTS: usize = 16;
 
 const FIND_EXISTING_TUNNEL_NODE_SQL: &str = r#"
 SELECT
@@ -1181,53 +1191,109 @@ impl ProxyNodeWriteRepository for SqlxProxyNodeRepository {
         &self,
         mutation: &ProxyNodeHeartbeatMutation,
     ) -> Result<Option<StoredProxyNode>, DataLayerError> {
-        let existing = self.find_proxy_node(&mutation.node_id).await?;
-        let Some(existing) = existing else {
-            return Ok(None);
-        };
-        if !existing.tunnel_mode {
-            return Err(DataLayerError::InvalidInput(
-                "non-tunnel mode is no longer supported, please upgrade aether-tunnel to use tunnel mode"
-                    .to_string(),
-            ));
+        let mut accepted = None;
+        for _ in 0..HEARTBEAT_UPDATE_MAX_ATTEMPTS {
+            let Some(existing) = self.find_proxy_node(&mutation.node_id).await? else {
+                return Ok(None);
+            };
+            if !existing.tunnel_mode {
+                return Err(DataLayerError::InvalidInput(
+                    "non-tunnel mode is no longer supported, please upgrade aether-tunnel to use tunnel mode"
+                        .to_string(),
+                ));
+            }
+
+            let observed_at_unix_secs = chrono::Utc::now().timestamp().max(0) as u64;
+            let prepared_heartbeat = prepare_proxy_node_heartbeat(
+                existing.proxy_metadata.as_ref(),
+                mutation.proxy_metadata.as_ref(),
+                mutation.proxy_version.as_deref(),
+                observed_at_unix_secs,
+            );
+            let expected_revision = prepared_heartbeat
+                .expected_heartbeat_revision
+                .map(|value| i64::try_from(value).unwrap_or(i64::MAX));
+            let result = sqlx::query(APPLY_HEARTBEAT_SQL)
+                .bind(&mutation.node_id)
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.heartbeat_interval)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.active_connections)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.avg_latency_ms)
+                        .flatten(),
+                )
+                .bind(prepared_heartbeat.proxy_metadata.clone())
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.total_requests_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.failed_requests_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.dns_failures_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.stream_errors_delta)
+                        .flatten(),
+                )
+                .bind(expected_revision)
+                .execute(&self.pool)
+                .await
+                .map_postgres_err()?;
+            if result.rows_affected() == 0
+                && prepared_heartbeat.apply_deltas
+                && expected_revision.is_some()
+            {
+                continue;
+            }
+
+            let Some(updated) = self.find_proxy_node(&mutation.node_id).await? else {
+                return Ok(None);
+            };
+            let now_unix_secs = updated
+                .last_heartbeat_at_unix_secs
+                .unwrap_or(observed_at_unix_secs);
+            accepted = Some((updated, prepared_heartbeat, now_unix_secs));
+            break;
         }
-
-        let normalized_proxy_metadata = normalize_proxy_metadata(
-            mutation.proxy_metadata.as_ref(),
-            mutation.proxy_version.as_deref(),
-        );
-        let normalized_proxy_metadata = preserve_proxy_metadata_tunnel_security(
-            existing.proxy_metadata.as_ref(),
-            normalized_proxy_metadata,
-        );
-
-        sqlx::query(APPLY_HEARTBEAT_SQL)
-            .bind(&mutation.node_id)
-            .bind(mutation.heartbeat_interval)
-            .bind(mutation.active_connections)
-            .bind(mutation.avg_latency_ms)
-            .bind(normalized_proxy_metadata)
-            .bind(mutation.total_requests_delta)
-            .bind(mutation.failed_requests_delta)
-            .bind(mutation.dns_failures_delta)
-            .bind(mutation.stream_errors_delta)
-            .execute(&self.pool)
-            .await
-            .map_postgres_err()?;
-
-        let updated = self.find_proxy_node(&mutation.node_id).await?;
-        let Some(updated) = updated else {
-            return Ok(None);
+        let Some((updated, prepared_heartbeat, now_unix_secs)) = accepted else {
+            return Err(DataLayerError::TimedOut(format!(
+                "proxy node heartbeat update remained contended for {} attempts: {}",
+                HEARTBEAT_UPDATE_MAX_ATTEMPTS, mutation.node_id
+            )));
         };
-        let now_unix_secs = updated
-            .last_heartbeat_at_unix_secs
-            .unwrap_or_else(|| chrono::Utc::now().timestamp().max(0) as u64);
-        let tunnel_metrics_sample = build_tunnel_metrics_sample(
-            existing.proxy_metadata.as_ref(),
-            updated.proxy_metadata.as_ref(),
-            updated.active_connections,
-            updated.tunnel_connected,
-        );
+        let tunnel_metrics_sample = if prepared_heartbeat.apply_deltas {
+            build_tunnel_metrics_sample(
+                prepared_heartbeat.previous_metrics_metadata.as_ref(),
+                prepared_heartbeat.current_metrics_metadata.as_ref(),
+                updated.active_connections,
+                updated.tunnel_connected,
+            )
+        } else {
+            None
+        };
 
         if let Some(sample) = tunnel_metrics_sample.as_ref() {
             self.upsert_metrics_bucket(

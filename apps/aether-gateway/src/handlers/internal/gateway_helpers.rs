@@ -390,37 +390,7 @@ pub(crate) fn parse_internal_tunnel_heartbeat_request(
             )
         })?;
 
-    let node_id = payload.node_id.trim();
-    if node_id.is_empty() || node_id.len() > 36 || payload.heartbeat_id == 0 {
-        return Err(build_internal_control_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "invalid heartbeat payload",
-        ));
-    }
-    if payload
-        .heartbeat_interval
-        .is_some_and(|value| !(5..=600).contains(&value))
-        || payload.active_connections.is_some_and(|value| value < 0)
-        || payload.total_requests.is_some_and(|value| value < 0)
-        || payload.window_total_requests.is_some_and(|value| value < 0)
-        || payload.avg_latency_ms.is_some_and(|value| value < 0.0)
-        || payload.failed_requests.is_some_and(|value| value < 0)
-        || payload
-            .window_failed_requests
-            .is_some_and(|value| value < 0)
-        || payload.dns_failures.is_some_and(|value| value < 0)
-        || payload.window_dns_failures.is_some_and(|value| value < 0)
-        || payload.stream_errors.is_some_and(|value| value < 0)
-        || payload.window_stream_errors.is_some_and(|value| value < 0)
-        || payload
-            .proxy_version
-            .as_deref()
-            .is_some_and(|value: &str| value.chars().count() > 20)
-        || payload
-            .proxy_metadata
-            .as_ref()
-            .is_some_and(|value: &serde_json::Value| !value.is_object())
-    {
+    if !payload.is_valid() {
         return Err(build_internal_control_error_response(
             http::StatusCode::BAD_REQUEST,
             "invalid heartbeat payload",

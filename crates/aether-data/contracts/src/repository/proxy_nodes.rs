@@ -163,6 +163,18 @@ pub struct ProxyNodeHeartbeatMutation {
     pub proxy_version: Option<String>,
 }
 
+/// Metadata produced while deciding whether a tunnel heartbeat is a new sample.
+/// The per-session history is kept inside proxy metadata so older databases do not
+/// need a schema migration just to understand the heartbeat cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedProxyNodeHeartbeat {
+    pub proxy_metadata: Option<Value>,
+    pub previous_metrics_metadata: Option<Value>,
+    pub current_metrics_metadata: Option<Value>,
+    pub apply_deltas: bool,
+    pub expected_heartbeat_revision: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProxyNodeTrafficMutation {
     pub node_id: String,
@@ -318,6 +330,9 @@ pub struct ProxyNodeMetricsCleanupSummary {
 }
 
 pub const PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR: &str = "tunnel_err";
+const HEARTBEAT_SESSION_HISTORY_KEY: &str = "_heartbeat_sessions";
+const HEARTBEAT_REVISION_KEY: &str = "_heartbeat_revision";
+const MAX_HEARTBEAT_SESSION_HISTORY: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TunnelErrorEventRecord {
@@ -375,21 +390,56 @@ pub fn build_tunnel_metrics_sample(
     let current = extract_tunnel_metrics_counters(current_proxy_metadata)?;
     let previous = extract_tunnel_metrics_counters(previous_proxy_metadata);
     let current_recent_errors = extract_recent_tunnel_errors(current_proxy_metadata);
+    let counters_are_comparable = match (
+        extract_heartbeat_cursor(previous_proxy_metadata),
+        extract_heartbeat_cursor(current_proxy_metadata),
+    ) {
+        (None, None) => true,
+        (Some(previous), Some(current)) => {
+            previous.session_id == current.session_id
+                && current.heartbeat_id > previous.heartbeat_id
+        }
+        _ => false,
+    };
 
-    let connect_errors_delta =
-        counter_delta_u64(previous.map(|v| v.connect_errors), current.connect_errors);
-    let disconnects_delta = counter_delta_u64(previous.map(|v| v.disconnects), current.disconnects);
-    let error_events_delta = counter_delta_u64(
-        previous.map(|v| v.error_events_total),
-        current.error_events_total,
-    );
-    let ws_in_bytes_delta = counter_delta_u64(previous.map(|v| v.ws_in_bytes), current.ws_in_bytes);
-    let ws_out_bytes_delta =
-        counter_delta_u64(previous.map(|v| v.ws_out_bytes), current.ws_out_bytes);
-    let ws_in_frames_delta =
-        counter_delta_u64(previous.map(|v| v.ws_in_frames), current.ws_in_frames);
-    let ws_out_frames_delta =
-        counter_delta_u64(previous.map(|v| v.ws_out_frames), current.ws_out_frames);
+    let connect_errors_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.connect_errors), current.connect_errors)
+    } else {
+        0
+    };
+    let disconnects_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.disconnects), current.disconnects)
+    } else {
+        0
+    };
+    let error_events_delta = if counters_are_comparable {
+        counter_delta_u64(
+            previous.map(|v| v.error_events_total),
+            current.error_events_total,
+        )
+    } else {
+        0
+    };
+    let ws_in_bytes_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.ws_in_bytes), current.ws_in_bytes)
+    } else {
+        0
+    };
+    let ws_out_bytes_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.ws_out_bytes), current.ws_out_bytes)
+    } else {
+        0
+    };
+    let ws_in_frames_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.ws_in_frames), current.ws_in_frames)
+    } else {
+        0
+    };
+    let ws_out_frames_delta = if counters_are_comparable {
+        counter_delta_u64(previous.map(|v| v.ws_out_frames), current.ws_out_frames)
+    } else {
+        0
+    };
 
     let take_recent = usize::try_from(error_events_delta).unwrap_or(usize::MAX);
     let recent_error_events = if take_recent == 0 {
@@ -491,6 +541,144 @@ pub fn preserve_proxy_metadata_tunnel_security(
     }
 }
 
+/// Prepares metadata and determines whether a heartbeat can contribute deltas.
+///
+/// New tunnel clients include a session and monotonic heartbeat ID. We retain a
+/// compact counter snapshot for each recent session, which lets multiple tunnel
+/// instances share one proxy node without treating every session switch as a
+/// counter reset. Cursorless payloads retain the legacy behavior.
+pub fn prepare_proxy_node_heartbeat(
+    previous_proxy_metadata: Option<&Value>,
+    incoming_proxy_metadata: Option<&Value>,
+    proxy_version: Option<&str>,
+    observed_at_unix_secs: u64,
+) -> PreparedProxyNodeHeartbeat {
+    let normalized = preserve_proxy_metadata_tunnel_security(
+        previous_proxy_metadata,
+        normalize_proxy_metadata(incoming_proxy_metadata, proxy_version),
+    );
+    let Some(current_cursor) = extract_heartbeat_cursor(normalized.as_ref()) else {
+        return PreparedProxyNodeHeartbeat {
+            proxy_metadata: normalized.clone(),
+            previous_metrics_metadata: previous_proxy_metadata.cloned(),
+            current_metrics_metadata: normalized,
+            apply_deltas: true,
+            expected_heartbeat_revision: None,
+        };
+    };
+    let previous_revision = previous_proxy_metadata
+        .and_then(|value| value.get(HEARTBEAT_REVISION_KEY))
+        .and_then(|value| json_u64(Some(value)))
+        .unwrap_or_default();
+
+    let mut sessions = previous_proxy_metadata
+        .and_then(|value| value.get(HEARTBEAT_SESSION_HISTORY_KEY))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    // Metadata written before session history was introduced can still seed the
+    // first entry for its own session.
+    let legacy_previous = previous_proxy_metadata
+        .filter(|value| {
+            extract_heartbeat_cursor(Some(value))
+                .is_some_and(|previous| previous.session_id == current_cursor.session_id)
+        })
+        .map(strip_heartbeat_session_history);
+    let previous_entry = sessions
+        .get(current_cursor.session_id)
+        .and_then(|entry| parse_heartbeat_session_entry(current_cursor.session_id, entry))
+        .or_else(|| {
+            legacy_previous.as_ref().and_then(|metadata| {
+                let cursor = extract_heartbeat_cursor(Some(metadata))?;
+                Some((cursor.heartbeat_id, metadata.clone()))
+            })
+        });
+
+    if previous_entry
+        .as_ref()
+        .is_some_and(|(heartbeat_id, _)| *heartbeat_id >= current_cursor.heartbeat_id)
+    {
+        return PreparedProxyNodeHeartbeat {
+            // Keep the last accepted metadata; a replay must not move the
+            // stored cursor backwards or erase a newer session snapshot.
+            proxy_metadata: previous_proxy_metadata.cloned().or(normalized),
+            previous_metrics_metadata: None,
+            current_metrics_metadata: None,
+            apply_deltas: false,
+            expected_heartbeat_revision: Some(previous_revision),
+        };
+    }
+
+    let current_metrics_metadata = normalized.as_ref().map(strip_heartbeat_session_history);
+    let previous_metrics_metadata = previous_entry.map(|(_, metadata)| metadata);
+    let session_metrics = current_metrics_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tunnel_metrics"))
+        .cloned();
+    sessions.insert(
+        current_cursor.session_id.to_string(),
+        serde_json::json!({
+            "heartbeat_id": current_cursor.heartbeat_id,
+            "observed_at_unix_secs": observed_at_unix_secs,
+            "tunnel_metrics": session_metrics,
+        }),
+    );
+    while sessions.len() > MAX_HEARTBEAT_SESSION_HISTORY {
+        let oldest = sessions
+            .iter()
+            .filter(|(session_id, _)| *session_id != current_cursor.session_id)
+            .min_by_key(|(session_id, entry)| {
+                (
+                    json_u64(entry.get("observed_at_unix_secs")).unwrap_or_default(),
+                    (*session_id).clone(),
+                )
+            })
+            .map(|(session_id, _)| session_id.clone());
+        let Some(oldest) = oldest else { break };
+        sessions.remove(&oldest);
+    }
+
+    let mut stored_metadata = match normalized {
+        Some(Value::Object(mut metadata)) => {
+            metadata.insert(
+                HEARTBEAT_SESSION_HISTORY_KEY.to_string(),
+                Value::Object(sessions),
+            );
+            metadata.insert(
+                HEARTBEAT_REVISION_KEY.to_string(),
+                previous_revision.saturating_add(1).into(),
+            );
+            Some(Value::Object(metadata))
+        }
+        None => Some(Value::Object(serde_json::Map::from_iter([
+            (
+                HEARTBEAT_SESSION_HISTORY_KEY.to_string(),
+                Value::Object(sessions),
+            ),
+            (
+                HEARTBEAT_REVISION_KEY.to_string(),
+                previous_revision.saturating_add(1).into(),
+            ),
+        ]))),
+        Some(value) => Some(value),
+    };
+
+    // `normalized` is always an object when a cursor exists, but retain a
+    // defensive fallback if a future metadata normalizer changes that contract.
+    if stored_metadata.is_none() {
+        stored_metadata = previous_proxy_metadata.cloned();
+    }
+
+    PreparedProxyNodeHeartbeat {
+        proxy_metadata: stored_metadata,
+        previous_metrics_metadata,
+        current_metrics_metadata,
+        apply_deltas: true,
+        expected_heartbeat_revision: Some(previous_revision),
+    }
+}
+
 fn extract_tunnel_metrics_counters(
     proxy_metadata: Option<&Value>,
 ) -> Option<TunnelMetricsCounters> {
@@ -509,6 +697,50 @@ fn extract_tunnel_metrics_counters(
         ws_out_frames: json_u64(tunnel_metrics.get("ws_out_frames")).unwrap_or(0),
         heartbeat_rtt_last_ms: json_u64(tunnel_metrics.get("heartbeat_rtt_last_ms")).unwrap_or(0),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HeartbeatCursor<'a> {
+    session_id: &'a str,
+    heartbeat_id: u64,
+}
+
+fn extract_heartbeat_cursor(proxy_metadata: Option<&Value>) -> Option<HeartbeatCursor<'_>> {
+    let metadata = proxy_metadata.and_then(Value::as_object)?;
+    let session_id = metadata
+        .get("heartbeat_session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 128)?;
+    let heartbeat_id = json_u64(metadata.get("heartbeat_id")).filter(|value| *value > 0)?;
+    Some(HeartbeatCursor {
+        session_id,
+        heartbeat_id,
+    })
+}
+
+fn strip_heartbeat_session_history(metadata: &Value) -> Value {
+    let Some(object) = metadata.as_object() else {
+        return metadata.clone();
+    };
+    let mut object = object.clone();
+    object.remove(HEARTBEAT_SESSION_HISTORY_KEY);
+    object.remove(HEARTBEAT_REVISION_KEY);
+    Value::Object(object)
+}
+
+fn parse_heartbeat_session_entry(session_id: &str, entry: &Value) -> Option<(u64, Value)> {
+    let entry = entry.as_object()?;
+    let heartbeat_id = json_u64(entry.get("heartbeat_id"))?;
+    let tunnel_metrics = entry.get("tunnel_metrics")?.clone();
+    Some((
+        heartbeat_id,
+        serde_json::json!({
+            "heartbeat_session_id": session_id,
+            "heartbeat_id": heartbeat_id,
+            "tunnel_metrics": tunnel_metrics,
+        }),
+    ))
 }
 
 fn extract_recent_tunnel_errors(proxy_metadata: Option<&Value>) -> Vec<TunnelErrorEventRecord> {
@@ -779,10 +1011,11 @@ mod tests {
 
     use super::{
         bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
-        normalize_proxy_node_scheduling_state, preserve_proxy_metadata_tunnel_security,
-        proxy_node_accepts_new_tunnels, proxy_reported_version,
-        reconcile_remote_config_after_heartbeat, remote_config_scheduling_state,
-        remote_config_upgrade_target, ProxyNodeMetricsStep, StoredProxyNode,
+        normalize_proxy_node_scheduling_state, prepare_proxy_node_heartbeat,
+        preserve_proxy_metadata_tunnel_security, proxy_node_accepts_new_tunnels,
+        proxy_reported_version, reconcile_remote_config_after_heartbeat,
+        remote_config_scheduling_state, remote_config_upgrade_target, ProxyNodeMetricsStep,
+        StoredProxyNode,
     };
 
     #[test]
@@ -939,6 +1172,164 @@ mod tests {
             build_tunnel_error_event_detail(&sample.recent_error_events[1]),
             "[newer] WebSocket write failed because the peer closed or reset the connection"
         );
+    }
+
+    #[test]
+    fn prepares_independent_session_cursors_and_rejects_replays() {
+        let session_a_first = json!({
+            "heartbeat_session_id": "session-a",
+            "heartbeat_id": 1,
+            "tunnel_metrics": {
+                "connect_errors": 2,
+                "disconnects": 1,
+                "error_events_total": 1,
+                "ws_in_bytes": 100,
+                "ws_out_bytes": 200,
+                "ws_in_frames": 3,
+                "ws_out_frames": 4,
+                "heartbeat_rtt_last_ms": 10
+            }
+        });
+        let prepared_a_first =
+            prepare_proxy_node_heartbeat(None, Some(&session_a_first), Some("1.0.0"), 100);
+        assert!(prepared_a_first.apply_deltas);
+        assert_eq!(prepared_a_first.expected_heartbeat_revision, Some(0));
+        let stored_a_first = prepared_a_first
+            .proxy_metadata
+            .expect("first session metadata should be stored");
+
+        let session_b_first = json!({
+            "heartbeat_session_id": "session-b",
+            "heartbeat_id": 1,
+            "tunnel_metrics": {
+                "connect_errors": 5,
+                "disconnects": 2,
+                "error_events_total": 1,
+                "ws_in_bytes": 500,
+                "ws_out_bytes": 600,
+                "ws_in_frames": 7,
+                "ws_out_frames": 8,
+                "heartbeat_rtt_last_ms": 20
+            }
+        });
+        let prepared_b_first = prepare_proxy_node_heartbeat(
+            Some(&stored_a_first),
+            Some(&session_b_first),
+            Some("1.0.0"),
+            101,
+        );
+        assert!(prepared_b_first.apply_deltas);
+        assert!(prepared_b_first.previous_metrics_metadata.is_none());
+        assert_eq!(prepared_b_first.expected_heartbeat_revision, Some(1));
+        let stored_b_first = prepared_b_first
+            .proxy_metadata
+            .expect("second session metadata should be stored");
+
+        let session_a_second = json!({
+            "heartbeat_session_id": "session-a",
+            "heartbeat_id": 2,
+            "tunnel_metrics": {
+                "connect_errors": 3,
+                "disconnects": 1,
+                "error_events_total": 2,
+                "ws_in_bytes": 150,
+                "ws_out_bytes": 260,
+                "ws_in_frames": 4,
+                "ws_out_frames": 5,
+                "heartbeat_rtt_last_ms": 11
+            },
+            "recent_tunnel_errors": [{
+                "timestamp_unix_secs": 102,
+                "category": "connect",
+                "message": "new error"
+            }]
+        });
+        let prepared_a_second = prepare_proxy_node_heartbeat(
+            Some(&stored_b_first),
+            Some(&session_a_second),
+            Some("1.0.0"),
+            102,
+        );
+        assert!(prepared_a_second.apply_deltas);
+        let sample = build_tunnel_metrics_sample(
+            prepared_a_second.previous_metrics_metadata.as_ref(),
+            prepared_a_second.current_metrics_metadata.as_ref(),
+            1,
+            true,
+        )
+        .expect("same-session metrics should build");
+        assert_eq!(sample.connect_errors_delta, 1);
+        assert_eq!(sample.error_events_delta, 1);
+        assert_eq!(sample.recent_error_events.len(), 1);
+
+        let stored_a_second = prepared_a_second
+            .proxy_metadata
+            .expect("advanced session metadata should be stored");
+        assert_eq!(
+            stored_a_second["_heartbeat_sessions"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(2)
+        );
+        let replay = prepare_proxy_node_heartbeat(
+            Some(&stored_a_second),
+            Some(&session_a_second),
+            Some("1.0.0"),
+            103,
+        );
+        assert!(!replay.apply_deltas);
+        assert!(replay.previous_metrics_metadata.is_none());
+        assert!(replay.current_metrics_metadata.is_none());
+        assert_eq!(replay.proxy_metadata, Some(stored_a_second));
+    }
+
+    #[test]
+    fn adopts_existing_single_cursor_metadata_without_losing_the_next_delta() {
+        let previous = json!({
+            "heartbeat_session_id": "session-a",
+            "heartbeat_id": 7,
+            "tunnel_metrics": {
+                "connect_errors": 3,
+                "disconnects": 1,
+                "error_events_total": 2,
+                "ws_in_bytes": 100,
+                "ws_out_bytes": 200,
+                "ws_in_frames": 4,
+                "ws_out_frames": 5,
+                "heartbeat_rtt_last_ms": 10
+            }
+        });
+        let current = json!({
+            "heartbeat_session_id": "session-a",
+            "heartbeat_id": 8,
+            "tunnel_metrics": {
+                "connect_errors": 4,
+                "disconnects": 1,
+                "error_events_total": 3,
+                "ws_in_bytes": 150,
+                "ws_out_bytes": 260,
+                "ws_in_frames": 5,
+                "ws_out_frames": 6,
+                "heartbeat_rtt_last_ms": 11
+            },
+            "recent_tunnel_errors": [{
+                "timestamp_unix_secs": 104,
+                "category": "upgrade",
+                "message": "new error"
+            }]
+        });
+
+        let prepared = prepare_proxy_node_heartbeat(Some(&previous), Some(&current), None, 104);
+        let sample = build_tunnel_metrics_sample(
+            prepared.previous_metrics_metadata.as_ref(),
+            prepared.current_metrics_metadata.as_ref(),
+            1,
+            true,
+        )
+        .expect("migrated cursor metrics should build");
+        assert_eq!(sample.connect_errors_delta, 1);
+        assert_eq!(sample.error_events_delta, 1);
+        assert_eq!(sample.recent_error_events.len(), 1);
     }
 
     #[test]

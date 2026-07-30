@@ -3,7 +3,7 @@ use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite};
 
 use aether_data_contracts::repository::proxy_nodes::{
     bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
-    normalize_proxy_metadata, preserve_proxy_metadata_tunnel_security,
+    normalize_proxy_metadata, prepare_proxy_node_heartbeat,
     reconcile_remote_config_after_heartbeat, ProxyNodeEventQuery, ProxyNodeHeartbeatMutation,
     ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeMetricsCleanupSummary,
     ProxyNodeMetricsStep, ProxyNodeReadRepository, ProxyNodeRegistrationMutation,
@@ -361,6 +361,43 @@ SELECT
   updated_at AS updated_at_unix_secs
 FROM proxy_nodes
 "#;
+
+const APPLY_HEARTBEAT_SQL: &str = r#"
+UPDATE proxy_nodes
+SET
+  last_heartbeat_at = ?,
+  status = 'online',
+  tunnel_connected = 1,
+  tunnel_connected_at = CASE
+    WHEN status <> 'online' OR tunnel_connected = 0 THEN ?
+    ELSE tunnel_connected_at
+  END,
+  updated_at = CASE
+    WHEN status <> 'online' OR tunnel_connected = 0 THEN ?
+    ELSE updated_at
+  END,
+  heartbeat_interval = COALESCE(?, heartbeat_interval),
+  active_connections = COALESCE(?, active_connections),
+  avg_latency_ms = COALESCE(?, avg_latency_ms),
+  proxy_metadata = COALESCE(?, proxy_metadata),
+  total_requests = total_requests + MAX(COALESCE(?, 0), 0),
+  failed_requests = failed_requests + MAX(COALESCE(?, 0), 0),
+  dns_failures = dns_failures + MAX(COALESCE(?, 0), 0),
+  stream_errors = stream_errors + MAX(COALESCE(?, 0), 0)
+WHERE id = ?
+  AND (
+    ? IS NULL
+    OR CASE
+      WHEN proxy_metadata IS NOT NULL
+        AND json_valid(proxy_metadata)
+        AND json_type(proxy_metadata, '$._heartbeat_revision') IN ('integer', 'real')
+        THEN CAST(json_extract(proxy_metadata, '$._heartbeat_revision') AS INTEGER)
+      ELSE 0
+    END = ?
+  )
+"#;
+
+const HEARTBEAT_UPDATE_MAX_ATTEMPTS: usize = 16;
 
 const PROXY_NODE_EVENT_COLUMNS: &str = r#"
 SELECT
@@ -765,76 +802,114 @@ WHERE is_manual = 0
         &self,
         mutation: &ProxyNodeHeartbeatMutation,
     ) -> Result<Option<StoredProxyNode>, DataLayerError> {
-        let Some(mut node) = self.find_proxy_node(&mutation.node_id).await? else {
-            return Ok(None);
+        let mut accepted = None;
+        for _ in 0..HEARTBEAT_UPDATE_MAX_ATTEMPTS {
+            let Some(existing) = self.find_proxy_node(&mutation.node_id).await? else {
+                return Ok(None);
+            };
+            if !existing.tunnel_mode {
+                return Err(DataLayerError::InvalidInput(
+                    "non-tunnel mode is no longer supported, please upgrade aether-tunnel to use tunnel mode"
+                        .to_string(),
+                ));
+            }
+
+            let now_unix_secs = current_unix_secs();
+            let prepared_heartbeat = prepare_proxy_node_heartbeat(
+                existing.proxy_metadata.as_ref(),
+                mutation.proxy_metadata.as_ref(),
+                mutation.proxy_version.as_deref(),
+                now_unix_secs,
+            );
+            let next_proxy_metadata = optional_json_to_string(
+                &prepared_heartbeat.proxy_metadata,
+                "proxy_nodes.proxy_metadata",
+            )?;
+            let expected_revision = prepared_heartbeat
+                .expected_heartbeat_revision
+                .map(|value| i64::try_from(value).unwrap_or(i64::MAX));
+            let result = sqlx::query(APPLY_HEARTBEAT_SQL)
+                .bind(now_unix_secs as i64)
+                .bind(now_unix_secs as i64)
+                .bind(now_unix_secs as i64)
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.heartbeat_interval)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.active_connections)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.avg_latency_ms)
+                        .flatten(),
+                )
+                .bind(next_proxy_metadata)
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.total_requests_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.failed_requests_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.dns_failures_delta)
+                        .flatten(),
+                )
+                .bind(
+                    prepared_heartbeat
+                        .apply_deltas
+                        .then_some(mutation.stream_errors_delta)
+                        .flatten(),
+                )
+                .bind(&mutation.node_id)
+                .bind(expected_revision)
+                .bind(expected_revision)
+                .execute(&self.pool)
+                .await
+                .map_sql_err()?;
+            if result.rows_affected() == 0
+                && prepared_heartbeat.apply_deltas
+                && expected_revision.is_some()
+            {
+                continue;
+            }
+
+            let Some(updated) = self.find_proxy_node(&mutation.node_id).await? else {
+                return Ok(None);
+            };
+            let tunnel_metrics_sample = if prepared_heartbeat.apply_deltas {
+                build_tunnel_metrics_sample(
+                    prepared_heartbeat.previous_metrics_metadata.as_ref(),
+                    prepared_heartbeat.current_metrics_metadata.as_ref(),
+                    updated.active_connections,
+                    updated.tunnel_connected,
+                )
+            } else {
+                None
+            };
+            accepted = Some((updated, tunnel_metrics_sample, now_unix_secs));
+            break;
+        }
+        let Some((node, tunnel_metrics_sample, now_unix_secs)) = accepted else {
+            return Err(DataLayerError::TimedOut(format!(
+                "proxy node heartbeat update remained contended for {} attempts: {}",
+                HEARTBEAT_UPDATE_MAX_ATTEMPTS, mutation.node_id
+            )));
         };
-        if !node.tunnel_mode {
-            return Err(DataLayerError::InvalidInput(
-                "non-tunnel mode is no longer supported, please upgrade aether-tunnel to use tunnel mode"
-                    .to_string(),
-            ));
-        }
-
-        let previous_proxy_metadata = node.proxy_metadata.clone();
-        let now_unix_secs = current_unix_secs();
-        let now = Some(now_unix_secs);
-        node.last_heartbeat_at_unix_secs = now;
-        if node.status != "online" || !node.tunnel_connected {
-            node.status = "online".to_string();
-            node.tunnel_connected = true;
-            node.tunnel_connected_at_unix_secs = now;
-            node.updated_at_unix_secs = now;
-        }
-        if let Some(value) = mutation.heartbeat_interval {
-            node.heartbeat_interval = value;
-        }
-        if let Some(value) = mutation.active_connections {
-            node.active_connections = value;
-        }
-        if let Some(value) = mutation.avg_latency_ms {
-            node.avg_latency_ms = Some(value);
-        }
-        let normalized_proxy_metadata = normalize_proxy_metadata(
-            mutation.proxy_metadata.as_ref(),
-            mutation.proxy_version.as_deref(),
-        );
-        let normalized_proxy_metadata = preserve_proxy_metadata_tunnel_security(
-            previous_proxy_metadata.as_ref(),
-            normalized_proxy_metadata,
-        );
-        if let Some(value) = normalized_proxy_metadata {
-            node.proxy_metadata = Some(value);
-        }
-        if let Some(value) = mutation.total_requests_delta.filter(|value| *value > 0) {
-            node.total_requests += value;
-        }
-        if let Some(value) = mutation.failed_requests_delta.filter(|value| *value > 0) {
-            node.failed_requests += value;
-        }
-        if let Some(value) = mutation.dns_failures_delta.filter(|value| *value > 0) {
-            node.dns_failures += value;
-        }
-        if let Some(value) = mutation.stream_errors_delta.filter(|value| *value > 0) {
-            node.stream_errors += value;
-        }
-        let reconciled_remote_config = reconcile_remote_config_after_heartbeat(
-            node.remote_config.as_ref(),
-            mutation.proxy_version.as_deref(),
-        );
-        if reconciled_remote_config != node.remote_config {
-            node.remote_config = reconciled_remote_config;
-            node.config_version = node.config_version.saturating_add(1);
-            node.updated_at_unix_secs = now;
-        }
-
-        let tunnel_metrics_sample = build_tunnel_metrics_sample(
-            previous_proxy_metadata.as_ref(),
-            node.proxy_metadata.as_ref(),
-            node.active_connections,
-            node.tunnel_connected,
-        );
-
-        self.upsert_node(&node).await?;
 
         if let Some(sample) = tunnel_metrics_sample.as_ref() {
             self.upsert_metrics_bucket(
@@ -879,6 +954,24 @@ WHERE is_manual = 0
                 )
                 .await?;
             }
+        }
+
+        if reconcile_remote_config_after_heartbeat(
+            node.remote_config.as_ref(),
+            mutation.proxy_version.as_deref(),
+        ) != node.remote_config
+        {
+            return self
+                .update_remote_config(&ProxyNodeRemoteConfigMutation {
+                    node_id: mutation.node_id.clone(),
+                    node_name: None,
+                    allowed_ports: None,
+                    log_level: None,
+                    heartbeat_interval: None,
+                    scheduling_state: None,
+                    upgrade_to: Some(None),
+                })
+                .await;
         }
 
         Ok(Some(node))
@@ -1279,7 +1372,7 @@ fn map_proxy_fleet_metric_row(
 
 #[cfg(test)]
 mod tests {
-    use super::SqliteProxyNodeReadRepository;
+    use super::{current_unix_secs, SqliteProxyNodeReadRepository};
     use crate::run_migrations;
     use aether_data_contracts::repository::proxy_nodes::{
         ProxyNodeEventQuery, ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation,
@@ -1746,5 +1839,182 @@ VALUES ('node-1', 'registered', 'ok', 3)
             .expect("cleanup should run");
         assert_eq!(cleanup.deleted_1m_rows, 1);
         assert_eq!(cleanup.deleted_1h_rows, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn sqlite_repository_deduplicates_concurrent_tunnel_heartbeats() {
+        let database_path = std::env::temp_dir().join(format!(
+            "aether-proxy-heartbeat-concurrency-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&database_path)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(30));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .expect("sqlite pool should connect");
+        run_migrations(&pool)
+            .await
+            .expect("sqlite migrations should run");
+        let repository = SqliteProxyNodeReadRepository::new(pool.clone());
+        let registered = repository
+            .register_node(&ProxyNodeRegistrationMutation {
+                name: "tunnel-concurrent".to_string(),
+                ip: "10.0.0.9".to_string(),
+                port: 7009,
+                region: None,
+                heartbeat_interval: 30,
+                active_connections: Some(0),
+                total_requests: Some(0),
+                avg_latency_ms: None,
+                hardware_info: None,
+                estimated_max_concurrency: None,
+                proxy_metadata: None,
+                proxy_version: Some("1.0.0".to_string()),
+                registered_by: None,
+                tunnel_mode: true,
+            })
+            .await
+            .expect("node should register");
+
+        let baseline = ProxyNodeHeartbeatMutation {
+            node_id: registered.id.clone(),
+            heartbeat_interval: Some(30),
+            active_connections: Some(1),
+            total_requests_delta: Some(5),
+            avg_latency_ms: None,
+            failed_requests_delta: None,
+            dns_failures_delta: None,
+            stream_errors_delta: None,
+            proxy_metadata: Some(json!({
+                "heartbeat_session_id": "session-concurrent",
+                "heartbeat_id": 1,
+                "tunnel_metrics": {
+                    "connect_errors": 0,
+                    "disconnects": 0,
+                    "error_events_total": 0,
+                    "ws_in_bytes": 0,
+                    "ws_out_bytes": 0,
+                    "ws_in_frames": 0,
+                    "ws_out_frames": 0,
+                    "heartbeat_rtt_last_ms": 10
+                }
+            })),
+            proxy_version: Some("1.0.0".to_string()),
+        };
+        apply_concurrent_heartbeats(&repository, baseline).await;
+
+        let now = current_unix_secs();
+        let next = ProxyNodeHeartbeatMutation {
+            node_id: registered.id.clone(),
+            heartbeat_interval: Some(30),
+            active_connections: Some(2),
+            total_requests_delta: Some(3),
+            avg_latency_ms: None,
+            failed_requests_delta: Some(1),
+            dns_failures_delta: None,
+            stream_errors_delta: None,
+            proxy_metadata: Some(json!({
+                "heartbeat_session_id": "session-concurrent",
+                "heartbeat_id": 2,
+                "tunnel_metrics": {
+                    "connect_errors": 1,
+                    "disconnects": 0,
+                    "error_events_total": 1,
+                    "ws_in_bytes": 100,
+                    "ws_out_bytes": 200,
+                    "ws_in_frames": 3,
+                    "ws_out_frames": 4,
+                    "heartbeat_rtt_last_ms": 11
+                },
+                "recent_tunnel_errors": [{
+                    "timestamp_unix_secs": now,
+                    "category": "concurrent_replay",
+                    "message": "must only be stored once"
+                }]
+            })),
+            proxy_version: Some("1.0.0".to_string()),
+        };
+        apply_concurrent_heartbeats(&repository, next).await;
+
+        let node = repository
+            .find_proxy_node(&registered.id)
+            .await
+            .expect("node should load")
+            .expect("node should exist");
+        assert_eq!(node.total_requests, 8);
+        assert_eq!(node.failed_requests, 1);
+        assert_eq!(
+            node.proxy_metadata
+                .as_ref()
+                .and_then(|value| value.get("_heartbeat_revision"))
+                .and_then(serde_json::Value::as_u64),
+            Some(2)
+        );
+
+        let metrics = repository
+            .list_proxy_node_metrics(
+                &registered.id,
+                ProxyNodeMetricsStep::OneMinute,
+                now.saturating_sub(120),
+                now.saturating_add(120),
+                10,
+            )
+            .await
+            .expect("metrics should list");
+        assert_eq!(metrics.iter().map(|item| item.samples).sum::<i64>(), 2);
+        assert_eq!(
+            metrics
+                .iter()
+                .map(|item| item.error_events_delta)
+                .sum::<i64>(),
+            1
+        );
+        let events = repository
+            .list_proxy_node_events_filtered(
+                &registered.id,
+                &ProxyNodeEventQuery {
+                    limit: 10,
+                    from_unix_secs: Some(now.saturating_sub(120)),
+                    to_unix_secs: Some(now.saturating_add(120)),
+                    event_type: Some(PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR.to_string()),
+                },
+            )
+            .await
+            .expect("events should list");
+        assert_eq!(events.len(), 1);
+
+        drop(repository);
+        pool.close().await;
+        let _ = std::fs::remove_file(&database_path);
+        let _ = std::fs::remove_file(format!("{}-wal", database_path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", database_path.display()));
+    }
+
+    async fn apply_concurrent_heartbeats(
+        repository: &SqliteProxyNodeReadRepository,
+        heartbeat: ProxyNodeHeartbeatMutation,
+    ) {
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let mut tasks = Vec::new();
+        for _ in 0..2 {
+            let repository = repository.clone();
+            let heartbeat = heartbeat.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                repository.apply_heartbeat(&heartbeat).await
+            }));
+        }
+        for task in tasks {
+            task.await
+                .expect("heartbeat task should join")
+                .expect("heartbeat should apply")
+                .expect("node should exist");
+        }
     }
 }

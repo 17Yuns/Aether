@@ -25,7 +25,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use tracing::warn;
 
@@ -34,6 +34,7 @@ use super::api::response::{build_client_response, build_local_http_error_respons
 use super::constants::TRACE_ID_HEADER;
 use super::data::GatewayDataState;
 use super::error::GatewayError;
+use super::handlers::shared::{attach_tunnel_heartbeat_cursor, InternalTunnelHeartbeatRequest};
 use super::headers::{extract_or_generate_trace_id, should_skip_request_header};
 use super::AppState;
 
@@ -73,38 +74,6 @@ pub(crate) async fn send_owner_forward_request(
         },
         None => request.send().await.map_err(|error| error.to_string()),
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct InternalTunnelHeartbeatRequest {
-    node_id: String,
-    heartbeat_id: u64,
-    #[serde(default)]
-    heartbeat_interval: Option<i32>,
-    #[serde(default)]
-    active_connections: Option<i32>,
-    #[serde(default)]
-    total_requests: Option<i64>,
-    #[serde(default)]
-    window_total_requests: Option<i64>,
-    #[serde(default)]
-    avg_latency_ms: Option<f64>,
-    #[serde(default)]
-    failed_requests: Option<i64>,
-    #[serde(default)]
-    window_failed_requests: Option<i64>,
-    #[serde(default)]
-    dns_failures: Option<i64>,
-    #[serde(default)]
-    window_dns_failures: Option<i64>,
-    #[serde(default)]
-    stream_errors: Option<i64>,
-    #[serde(default)]
-    window_stream_errors: Option<i64>,
-    #[serde(default)]
-    proxy_metadata: Option<serde_json::Value>,
-    #[serde(default)]
-    proxy_version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1068,6 +1037,11 @@ async fn apply_embedded_tunnel_heartbeat(
 ) -> Result<Vec<u8>, String> {
     let payload = parse_embedded_tunnel_heartbeat_request(request_body)?;
     let node_id = payload.node_id.trim().to_string();
+    let proxy_metadata = attach_tunnel_heartbeat_cursor(
+        payload.proxy_metadata,
+        payload.heartbeat_session_id.as_deref(),
+        payload.heartbeat_id,
+    );
     let mutation = ProxyNodeHeartbeatMutation {
         node_id: node_id.clone(),
         heartbeat_interval: payload.heartbeat_interval,
@@ -1077,7 +1051,7 @@ async fn apply_embedded_tunnel_heartbeat(
         failed_requests_delta: payload.window_failed_requests.or(payload.failed_requests),
         dns_failures_delta: payload.window_dns_failures.or(payload.dns_failures),
         stream_errors_delta: payload.window_stream_errors.or(payload.stream_errors),
-        proxy_metadata: payload.proxy_metadata,
+        proxy_metadata,
         proxy_version: payload.proxy_version,
     };
 
@@ -1140,34 +1114,7 @@ fn parse_embedded_tunnel_heartbeat_request(
     let payload = serde_json::from_slice::<InternalTunnelHeartbeatRequest>(request_body)
         .map_err(|_| "invalid heartbeat payload".to_string())?;
 
-    let node_id = payload.node_id.trim();
-    if node_id.is_empty() || node_id.len() > 36 || payload.heartbeat_id == 0 {
-        return Err("invalid heartbeat payload".to_string());
-    }
-    if payload
-        .heartbeat_interval
-        .is_some_and(|value| !(5..=600).contains(&value))
-        || payload.active_connections.is_some_and(|value| value < 0)
-        || payload.total_requests.is_some_and(|value| value < 0)
-        || payload.window_total_requests.is_some_and(|value| value < 0)
-        || payload.avg_latency_ms.is_some_and(|value| value < 0.0)
-        || payload.failed_requests.is_some_and(|value| value < 0)
-        || payload
-            .window_failed_requests
-            .is_some_and(|value| value < 0)
-        || payload.dns_failures.is_some_and(|value| value < 0)
-        || payload.window_dns_failures.is_some_and(|value| value < 0)
-        || payload.stream_errors.is_some_and(|value| value < 0)
-        || payload.window_stream_errors.is_some_and(|value| value < 0)
-        || payload
-            .proxy_version
-            .as_deref()
-            .is_some_and(|value| value.chars().count() > 20)
-        || payload
-            .proxy_metadata
-            .as_ref()
-            .is_some_and(|value| !value.is_object())
-    {
+    if !payload.is_valid() {
         return Err("invalid heartbeat payload".to_string());
     }
 
@@ -1352,10 +1299,9 @@ mod tests {
         )]));
         let data = GatewayDataState::with_proxy_node_repository_for_tests(Arc::clone(&repository));
 
-        let ack = apply_embedded_tunnel_heartbeat(
-            &data,
-            br#"{
+        let heartbeat = br#"{
                 "node_id": "node-123",
+                "heartbeat_session_id": "session-embedded-a",
                 "heartbeat_id": 42,
                 "heartbeat_interval": 45,
                 "active_connections": 5,
@@ -1366,10 +1312,13 @@ mod tests {
                 "stream_errors": 3,
                 "proxy_metadata": {"arch": "arm64"},
                 "proxy_version": "2.0.0"
-            }"#,
-        )
-        .await
-        .expect("heartbeat should succeed");
+            }"#;
+        let ack = apply_embedded_tunnel_heartbeat(&data, heartbeat)
+            .await
+            .expect("heartbeat should succeed");
+        apply_embedded_tunnel_heartbeat(&data, heartbeat)
+            .await
+            .expect("replayed heartbeat should be acknowledged");
 
         let payload: serde_json::Value =
             serde_json::from_slice(&ack).expect("ack payload should parse");
@@ -1391,6 +1340,22 @@ mod tests {
         assert_eq!(node.failed_requests, 1);
         assert_eq!(node.dns_failures, 2);
         assert_eq!(node.stream_errors, 3);
+        assert_eq!(
+            node.proxy_metadata
+                .as_ref()
+                .and_then(|value| value.get("heartbeat_session_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("session-embedded-a")
+        );
+        assert_eq!(
+            node.proxy_metadata
+                .as_ref()
+                .and_then(|value| value.get("_heartbeat_sessions"))
+                .and_then(|value| value.get("session-embedded-a"))
+                .and_then(|value| value.get("heartbeat_id"))
+                .and_then(serde_json::Value::as_u64),
+            Some(42)
+        );
         assert_eq!(
             node.proxy_metadata
                 .as_ref()

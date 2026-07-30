@@ -10,7 +10,7 @@ use super::log_reported_tunnel_error_event;
 use crate::DataLayerError;
 use aether_data_contracts::repository::proxy_nodes::{
     bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
-    normalize_proxy_metadata, preserve_proxy_metadata_tunnel_security,
+    normalize_proxy_metadata, prepare_proxy_node_heartbeat,
     reconcile_remote_config_after_heartbeat, ProxyNodeEventQuery, ProxyNodeHeartbeatMutation,
     ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeMetricsCleanupSummary,
     ProxyNodeMetricsStep, ProxyNodeReadRepository, ProxyNodeRegistrationMutation,
@@ -578,37 +578,37 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
                 node.updated_at_unix_secs = now;
             }
 
-            if let Some(value) = mutation.heartbeat_interval {
-                node.heartbeat_interval = value;
-            }
-            if let Some(value) = mutation.active_connections {
-                node.active_connections = value;
-            }
-            if let Some(value) = mutation.avg_latency_ms {
-                node.avg_latency_ms = Some(value);
-            }
-            let normalized_proxy_metadata = normalize_proxy_metadata(
+            let prepared_heartbeat = prepare_proxy_node_heartbeat(
+                previous_proxy_metadata.as_ref(),
                 mutation.proxy_metadata.as_ref(),
                 mutation.proxy_version.as_deref(),
+                now_unix_secs,
             );
-            let normalized_proxy_metadata = preserve_proxy_metadata_tunnel_security(
-                previous_proxy_metadata.as_ref(),
-                normalized_proxy_metadata,
-            );
-            if let Some(value) = normalized_proxy_metadata {
+            if let Some(value) = prepared_heartbeat.proxy_metadata.clone() {
                 node.proxy_metadata = Some(value);
             }
-            if let Some(value) = mutation.total_requests_delta.filter(|value| *value > 0) {
-                node.total_requests += value;
-            }
-            if let Some(value) = mutation.failed_requests_delta.filter(|value| *value > 0) {
-                node.failed_requests += value;
-            }
-            if let Some(value) = mutation.dns_failures_delta.filter(|value| *value > 0) {
-                node.dns_failures += value;
-            }
-            if let Some(value) = mutation.stream_errors_delta.filter(|value| *value > 0) {
-                node.stream_errors += value;
+            if prepared_heartbeat.apply_deltas {
+                if let Some(value) = mutation.heartbeat_interval {
+                    node.heartbeat_interval = value;
+                }
+                if let Some(value) = mutation.active_connections {
+                    node.active_connections = value;
+                }
+                if let Some(value) = mutation.avg_latency_ms {
+                    node.avg_latency_ms = Some(value);
+                }
+                if let Some(value) = mutation.total_requests_delta.filter(|value| *value > 0) {
+                    node.total_requests += value;
+                }
+                if let Some(value) = mutation.failed_requests_delta.filter(|value| *value > 0) {
+                    node.failed_requests += value;
+                }
+                if let Some(value) = mutation.dns_failures_delta.filter(|value| *value > 0) {
+                    node.dns_failures += value;
+                }
+                if let Some(value) = mutation.stream_errors_delta.filter(|value| *value > 0) {
+                    node.stream_errors += value;
+                }
             }
             let reconciled_remote_config = reconcile_remote_config_after_heartbeat(
                 node.remote_config.as_ref(),
@@ -620,12 +620,16 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
                 node.updated_at_unix_secs = now;
             }
 
-            let sample = build_tunnel_metrics_sample(
-                previous_proxy_metadata.as_ref(),
-                node.proxy_metadata.as_ref(),
-                node.active_connections,
-                node.tunnel_connected,
-            );
+            let sample = if prepared_heartbeat.apply_deltas {
+                build_tunnel_metrics_sample(
+                    prepared_heartbeat.previous_metrics_metadata.as_ref(),
+                    prepared_heartbeat.current_metrics_metadata.as_ref(),
+                    node.active_connections,
+                    node.tunnel_connected,
+                )
+            } else {
+                None
+            };
             (node.clone(), sample, now_unix_secs)
         };
 

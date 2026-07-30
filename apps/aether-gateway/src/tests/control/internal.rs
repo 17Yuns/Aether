@@ -79,25 +79,28 @@ async fn gateway_handles_internal_tunnel_heartbeat_locally_with_loopback() {
     );
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
-    let response = reqwest::Client::new()
+    let heartbeat = json!({
+        "node_id": "node-123",
+        "heartbeat_session_id": "session-http-a",
+        "heartbeat_id": 77,
+        "heartbeat_interval": 45,
+        "active_connections": 5,
+        "total_requests": 100,
+        "avg_latency_ms": 12.5,
+        "failed_requests": 20,
+        "dns_failures": 30,
+        "stream_errors": 40,
+        "window_total_requests": 9,
+        "window_failed_requests": 1,
+        "window_dns_failures": 2,
+        "window_stream_errors": 3,
+        "proxy_metadata": {"arch": "arm64"},
+        "proxy_version": "2.0.0",
+    });
+    let client = reqwest::Client::new();
+    let response = client
         .post(format!("{gateway_url}/api/internal/tunnel/heartbeat"))
-        .json(&json!({
-            "node_id": "node-123",
-            "heartbeat_id": 77,
-            "heartbeat_interval": 45,
-            "active_connections": 5,
-            "total_requests": 100,
-            "avg_latency_ms": 12.5,
-            "failed_requests": 20,
-            "dns_failures": 30,
-            "stream_errors": 40,
-            "window_total_requests": 9,
-            "window_failed_requests": 1,
-            "window_dns_failures": 2,
-            "window_stream_errors": 3,
-            "proxy_metadata": {"arch": "arm64"},
-            "proxy_version": "2.0.0",
-        }))
+        .json(&heartbeat)
         .send()
         .await
         .expect("request should succeed");
@@ -108,6 +111,16 @@ async fn gateway_handles_internal_tunnel_heartbeat_locally_with_loopback() {
     assert_eq!(payload["config_version"], 7);
     assert_eq!(payload["upgrade_to"], "1.2.3");
     assert_eq!(payload["remote_config"]["allowed_ports"][0], 443);
+    let mut replayed_heartbeat = heartbeat.clone();
+    replayed_heartbeat["active_connections"] = json!(999);
+    replayed_heartbeat["window_total_requests"] = json!(999);
+    let replay = client
+        .post(format!("{gateway_url}/api/internal/tunnel/heartbeat"))
+        .json(&replayed_heartbeat)
+        .send()
+        .await
+        .expect("replayed request should succeed");
+    assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
     let node = repository
         .find_proxy_node("node-123")
@@ -118,6 +131,14 @@ async fn gateway_handles_internal_tunnel_heartbeat_locally_with_loopback() {
     assert_eq!(node.failed_requests, 1);
     assert_eq!(node.dns_failures, 2);
     assert_eq!(node.stream_errors, 3);
+    assert_eq!(node.active_connections, 5);
+    assert_eq!(
+        node.proxy_metadata
+            .as_ref()
+            .and_then(|value| value.get("heartbeat_session_id"))
+            .and_then(serde_json::Value::as_str),
+        Some("session-http-a")
+    );
 
     gateway_handle.abort();
     upstream_handle.abort();

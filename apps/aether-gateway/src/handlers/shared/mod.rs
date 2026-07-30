@@ -44,8 +44,9 @@ pub(crate) use self::normalize::{
     normalize_user_self_feature_settings_update, parse_json_ip_rules,
 };
 pub(crate) use self::payloads::{
-    InternalGatewayAuthContextRequest, InternalGatewayExecuteRequest,
-    InternalGatewayResolveRequest, InternalTunnelHeartbeatRequest, InternalTunnelNodeStatusRequest,
+    attach_tunnel_heartbeat_cursor, InternalGatewayAuthContextRequest,
+    InternalGatewayExecuteRequest, InternalGatewayResolveRequest, InternalTunnelHeartbeatRequest,
+    InternalTunnelNodeStatusRequest,
 };
 pub(crate) use self::payment_direct::{
     close_direct_gateway_order, create_alipay_direct_checkout, create_stripe_direct_checkout,
