@@ -9641,12 +9641,13 @@ mod tests {
         assert_eq!(transaction.balance_before, 13.0);
         assert_eq!(transaction.balance_after, 0.0);
         assert_eq!(wallet.balance + wallet.gift_balance, 0.0);
-        let persisted_amount: f64 =
-            sqlx::query_scalar("SELECT amount FROM wallet_transactions WHERE id = $1")
-                .bind(&transaction.id)
-                .fetch_one(&pool)
-                .await
-                .expect("ledger should store the effective deduction");
+        let persisted_amount: f64 = sqlx::query_scalar(
+            "SELECT amount::double precision FROM wallet_transactions WHERE id = $1",
+        )
+        .bind(&transaction.id)
+        .fetch_one(&pool)
+        .await
+        .expect("ledger should store the effective deduction");
         assert_eq!(persisted_amount, -13.0);
 
         let (wallet, transaction) = repository
@@ -9698,6 +9699,14 @@ mod tests {
         assert_eq!(transaction.amount, 1.0);
         assert_eq!(transaction.balance_before, -1.0);
         assert_eq!(transaction.balance_after, 0.0);
+        let persisted_correction_amount: f64 = sqlx::query_scalar(
+            "SELECT amount::double precision FROM wallet_transactions WHERE id = $1",
+        )
+        .bind(&transaction.id)
+        .fetch_one(&pool)
+        .await
+        .expect("ledger should store the negative-balance correction");
+        assert_eq!(persisted_correction_amount, 1.0);
         let transaction_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM wallet_transactions WHERE wallet_id = $1")
                 .bind(&wallet_id)
