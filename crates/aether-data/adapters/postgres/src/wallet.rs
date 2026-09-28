@@ -812,7 +812,12 @@ impl SqlxWalletRepository {
 
 fn effective_wallet_adjustment_amount(input: &AdjustWalletBalanceInput, before_total: f64) -> f64 {
     if input.clamp_deduction_to_available_balance && input.amount_usd < 0.0 {
-        -(-input.amount_usd).min(before_total.max(0.0))
+        if before_total < 0.0 {
+            // Clear legacy negative totals to zero and record the actual ledger delta.
+            -before_total
+        } else {
+            -(-input.amount_usd).min(before_total)
+        }
     } else {
         input.amount_usd
     }
@@ -9598,7 +9603,7 @@ mod tests {
         };
         assert_eq!(effective_wallet_adjustment_amount(&input, 13.0), -13.0);
         assert_eq!(effective_wallet_adjustment_amount(&input, 0.0), -0.0);
-        assert_eq!(effective_wallet_adjustment_amount(&input, -1.0), -0.0);
+        assert_eq!(effective_wallet_adjustment_amount(&input, -1.0), 1.0);
 
         let legacy_input = AdjustWalletBalanceInput {
             clamp_deduction_to_available_balance: false,
@@ -9681,22 +9686,25 @@ mod tests {
                 amount_usd: -1.0,
                 balance_type: "recharge".to_string(),
                 operator_id: Some("admin-user".to_string()),
-                description: Some("bulk deduction from negative balance".to_string()),
+                description: Some("bulk deduction floors a negative balance".to_string()),
                 clamp_deduction_to_available_balance: true,
                 batch_context: None,
             })
             .await
-            .expect("legacy negative wallet should remain usable")
+            .expect("legacy negative wallet should be floored at zero")
             .expect("wallet should still exist");
-        assert_eq!(wallet.balance + wallet.gift_balance, -1.0);
-        assert!(transaction.is_none());
+        assert_eq!(wallet.balance + wallet.gift_balance, 0.0);
+        let transaction = transaction.expect("negative balance correction should be ledgered");
+        assert_eq!(transaction.amount, 1.0);
+        assert_eq!(transaction.balance_before, -1.0);
+        assert_eq!(transaction.balance_after, 0.0);
         let transaction_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM wallet_transactions WHERE wallet_id = $1")
                 .bind(&wallet_id)
                 .fetch_one(&pool)
                 .await
                 .expect("ledger row count should be readable");
-        assert_eq!(transaction_count, 1);
+        assert_eq!(transaction_count, 2);
         pool.close().await;
     }
 

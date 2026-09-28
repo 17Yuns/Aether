@@ -581,7 +581,7 @@ async fn gateway_reports_wallet_limit_lookup_failure_as_unprocessed() {
 }
 
 #[tokio::test]
-async fn gateway_reports_missing_wallet_and_skips_zero_delta_for_non_positive_balance() {
+async fn gateway_reports_missing_wallet_and_floors_negative_balance_on_deduction() {
     let state = AppState::new()
         .expect("gateway should build")
         .with_auth_users_for_tests([sample_user("user-negative"), sample_user("user-no-wallet")])
@@ -607,8 +607,8 @@ async fn gateway_reports_missing_wallet_and_skips_zero_delta_for_non_positive_ba
     assert_eq!(result["failures"][0]["reason"], "用户钱包不可用");
 
     let wallet = wallet_detail(&client, &gateway_url, "user-negative").await;
-    assert_eq!(wallet["balance"], -1.0);
-    assert_eq!(wallet["total_adjusted"], 0.0);
+    assert_eq!(wallet["balance"], 0.0);
+    assert_eq!(wallet["total_adjusted"], 1.0);
 
     gateway_handle.abort();
 }

@@ -226,7 +226,11 @@ impl AppState {
             let before_gift = wallet.gift_balance;
             let before_total = before_recharge + before_gift;
             let amount_usd = if clamp_deduction_to_available_balance && amount_usd < 0.0 {
-                -(-amount_usd).min(before_total.max(0.0))
+                if before_total < 0.0 {
+                    -before_total
+                } else {
+                    -(-amount_usd).min(before_total)
+                }
             } else {
                 amount_usd
             };
