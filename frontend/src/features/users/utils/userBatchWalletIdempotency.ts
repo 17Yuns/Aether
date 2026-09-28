@@ -23,6 +23,7 @@ interface CoordinatorOptions {
   storage?: StringStorage | null
   createKey?: () => string
   fallback?: Map<string, string>
+  lockManager?: Pick<LockManager, 'request'> | null
   scope?: () => string | null
 }
 
@@ -50,6 +51,20 @@ export class WalletIdempotencyPersistenceUnavailableError extends Error {
   }
 }
 
+export class WalletIdempotencyCoordinationUnavailableError extends Error {
+  constructor() {
+    super('Cross-tab wallet request coordination is unavailable')
+    this.name = 'WalletIdempotencyCoordinationUnavailableError'
+  }
+}
+
+export class WalletIdempotencyRequestInProgressError extends Error {
+  constructor() {
+    super('A wallet batch request is already in progress in another tab')
+    this.name = 'WalletIdempotencyRequestInProgressError'
+  }
+}
+
 export class WalletIdempotencyScopeUnavailableError extends Error {
   constructor() {
     super('The authenticated administrator identity is unavailable')
@@ -74,6 +89,14 @@ export class InvalidPendingWalletRequestError extends Error {
 function browserPersistentStorage(): StringStorage | null {
   try {
     return globalThis.localStorage ?? null
+  } catch {
+    return null
+  }
+}
+
+function browserLockManager(): Pick<LockManager, 'request'> | null {
+  try {
+    return globalThis.navigator?.locks ?? null
   } catch {
     return null
   }
@@ -145,6 +168,9 @@ export function createUserBatchWalletRetryCoordinator(options: CoordinatorOption
   const storage = 'storage' in options ? options.storage ?? null : browserPersistentStorage()
   const fallback = options.fallback ?? inMemoryFallback
   const createKey = options.createKey ?? secureRandomUUID
+  const lockManager = 'lockManager' in options
+    ? options.lockManager ?? null
+    : browserLockManager()
   const getScope = options.scope ?? (() => 'default')
 
   function getStorageKey(): string {
@@ -192,6 +218,26 @@ export function createUserBatchWalletRetryCoordinator(options: CoordinatorOption
     }
   }
 
+  async function withExclusiveLock<T>(storageKey: string, task: () => Promise<T>): Promise<T> {
+    if (!lockManager) throw new WalletIdempotencyCoordinationUnavailableError()
+
+    let taskStarted = false
+    try {
+      return await lockManager.request(
+        storageKey,
+        { mode: 'exclusive', ifAvailable: true },
+        async (lock) => {
+          if (lock === null) throw new WalletIdempotencyRequestInProgressError()
+          taskStarted = true
+          return task()
+        },
+      )
+    } catch (error) {
+      if (taskStarted || error instanceof WalletIdempotencyRequestInProgressError) throw error
+      throw new WalletIdempotencyCoordinationUnavailableError()
+    }
+  }
+
   function getOrCreate(
     storageKey: string,
     request: UserBatchWalletAdjustmentRequest,
@@ -234,19 +280,23 @@ export function createUserBatchWalletRetryCoordinator(options: CoordinatorOption
       send: (request: UserBatchBalanceActionRequest) => Promise<UserBatchActionResponse>,
     ) {
       const storageKey = getStorageKey()
-      const keyedRequest = getOrCreate(storageKey, request)
-      if (getStorageKey() !== storageKey) throw new WalletIdempotencyScopeChangedError()
-      return sendAndResolve(keyedRequest, send, storageKey)
+      return withExclusiveLock(storageKey, async () => {
+        const keyedRequest = getOrCreate(storageKey, request)
+        if (getStorageKey() !== storageKey) throw new WalletIdempotencyScopeChangedError()
+        return sendAndResolve(keyedRequest, send, storageKey)
+      })
     },
     async retry(
       send: (request: UserBatchBalanceActionRequest) => Promise<UserBatchActionResponse>,
     ): Promise<UserBatchActionResponse | null> {
       const storageKey = getStorageKey()
-      const pending = readPending(storageKey)
-      if (!pending) return null
-      persist(storageKey, pending)
-      if (getStorageKey() !== storageKey) throw new WalletIdempotencyScopeChangedError()
-      return sendAndResolve(pending.request, send, storageKey)
+      return withExclusiveLock(storageKey, async () => {
+        const pending = readPending(storageKey)
+        if (!pending) return null
+        persist(storageKey, pending)
+        if (getStorageKey() !== storageKey) throw new WalletIdempotencyScopeChangedError()
+        return sendAndResolve(pending.request, send, storageKey)
+      })
     },
   }
 }

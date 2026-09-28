@@ -172,7 +172,9 @@ import { buildUserBatchBalanceAdjustmentPayload } from '@/api/users'
 import {
   createUserBatchWalletRetryCoordinator,
   matchesPendingWalletRequest,
+  WalletIdempotencyCoordinationUnavailableError,
   WalletIdempotencyPersistenceUnavailableError,
+  WalletIdempotencyRequestInProgressError,
   WalletIdempotencyScopeChangedError,
   WalletIdempotencyScopeUnavailableError,
   WalletIdempotencyUnavailableError,
@@ -438,6 +440,10 @@ async function executeBatchAction(): Promise<void> {
       refreshPendingWalletBatch()
       if (err instanceof WalletIdempotencyPersistenceUnavailableError) {
         warning(legacyT('浏览器无法安全保存钱包批量请求，本次请求未发送。'))
+      } else if (err instanceof WalletIdempotencyRequestInProgressError) {
+        warning(legacyT('另一个标签页正在处理钱包批量调整，请稍后刷新状态再试。此次未发送新请求。'))
+      } else if (err instanceof WalletIdempotencyCoordinationUnavailableError) {
+        warning(legacyT('当前浏览器无法保护跨标签页的钱包批量请求，请使用支持此功能的浏览器。请求未发送。'))
       } else if (
         err instanceof WalletIdempotencyUnavailableError
         || err instanceof WalletIdempotencyScopeUnavailableError
@@ -468,6 +474,10 @@ async function retryPendingWalletBatch(): Promise<void> {
     refreshPendingWalletBatch()
     if (err instanceof WalletIdempotencyPersistenceUnavailableError) {
       warning(legacyT('浏览器无法安全保存钱包批量请求，本次请求未发送。'))
+    } else if (err instanceof WalletIdempotencyRequestInProgressError) {
+      warning(legacyT('另一个标签页正在处理钱包批量调整，请稍后刷新状态再试。此次未发送新请求。'))
+    } else if (err instanceof WalletIdempotencyCoordinationUnavailableError) {
+      warning(legacyT('当前浏览器无法保护跨标签页的钱包批量请求，请使用支持此功能的浏览器。请求未发送。'))
     } else if (
       err instanceof WalletIdempotencyScopeUnavailableError
       || err instanceof WalletIdempotencyScopeChangedError

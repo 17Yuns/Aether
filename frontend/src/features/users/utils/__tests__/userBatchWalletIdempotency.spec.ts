@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserBatchActionResponse, UserBatchBalanceActionRequest } from '@/api/users'
 import {
   createUserBatchWalletRetryCoordinator,
+  WalletIdempotencyCoordinationUnavailableError,
+  WalletIdempotencyRequestInProgressError,
   UnresolvedWalletRequestMismatchError,
   WalletIdempotencyPersistenceUnavailableError,
   WalletIdempotencyUnavailableError,
@@ -23,6 +25,31 @@ const walletRequest = {
 }
 const defaultStorageKey = 'admin.users.batch.wallet-adjustment.pending.v1:default'
 let testFallback: Map<string, string>
+let testLockManager: Pick<LockManager, 'request'>
+
+type CoordinatorOptions = NonNullable<Parameters<typeof createUserBatchWalletRetryCoordinator>[0]>
+
+function createTestLockManager(): Pick<LockManager, 'request'> {
+  const heldNames = new Set<string>()
+  const request = async <T>(
+    name: string,
+    _options: LockOptions,
+    callback: (lock: Lock | null) => Promise<T>,
+  ): Promise<T> => {
+    if (heldNames.has(name)) return callback(null)
+    heldNames.add(name)
+    try {
+      return await callback({ name, mode: 'exclusive' } as Lock)
+    } finally {
+      heldNames.delete(name)
+    }
+  }
+  return { request } as unknown as Pick<LockManager, 'request'>
+}
+
+function createCoordinator(options: Omit<CoordinatorOptions, 'lockManager'> = {}) {
+  return createUserBatchWalletRetryCoordinator({ ...options, lockManager: testLockManager })
+}
 
 function response(interrupted = false): UserBatchActionResponse {
   return { total: 2, success: 1, failed: 0, failures: [], interrupted }
@@ -33,11 +60,12 @@ describe('user batch wallet idempotency', () => {
     sessionStorage.clear()
     localStorage.clear()
     testFallback = new Map()
+    testLockManager = createTestLockManager()
   })
 
   it('serializes the key with the exact top-level wallet request before sending', async () => {
     const storage = createStorage()
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => 'wallet-key-1',
@@ -58,9 +86,57 @@ describe('user batch wallet idempotency', () => {
     })
   })
 
+  it('rejects a second tab while the same wallet batch request is in progress', async () => {
+    const storage = createStorage()
+    const first = createCoordinator({
+      storage,
+      fallback: testFallback,
+      createKey: () => 'wallet-key-first-tab',
+    })
+    const second = createCoordinator({
+      storage,
+      fallback: testFallback,
+      createKey: () => 'wallet-key-second-tab',
+    })
+    let resolveFirst!: (value: UserBatchActionResponse) => void
+    const firstSend = vi.fn(() => new Promise<UserBatchActionResponse>((resolve) => {
+      resolveFirst = resolve
+    }))
+    const secondSend = vi.fn(async () => response())
+    const firstExecution = first.execute(walletRequest, firstSend)
+
+    await vi.waitFor(() => expect(firstSend).toHaveBeenCalledOnce())
+    await expect(second.execute(walletRequest, secondSend)).rejects.toBeInstanceOf(
+      WalletIdempotencyRequestInProgressError,
+    )
+    expect(secondSend).not.toHaveBeenCalled()
+
+    resolveFirst(response())
+    await expect(firstExecution).resolves.toEqual(response())
+    expect(firstSend).toHaveBeenCalledOnce()
+    expect(storage.getItem(defaultStorageKey)).toBeNull()
+  })
+
+  it('fails closed when cross-tab request coordination is unavailable', async () => {
+    const storage = createStorage()
+    const send = vi.fn(async () => response())
+    const coordinator = createUserBatchWalletRetryCoordinator({
+      storage,
+      fallback: testFallback,
+      lockManager: null,
+      createKey: () => 'wallet-key-without-locks',
+    })
+
+    await expect(coordinator.execute(walletRequest, send)).rejects.toBeInstanceOf(
+      WalletIdempotencyCoordinationUnavailableError,
+    )
+    expect(send).not.toHaveBeenCalled()
+    expect(storage.getItem(defaultStorageKey)).toBeNull()
+  })
+
   it('retains a transport failure and reopens with the exact request for retry', async () => {
     const storage = createStorage()
-    const first = createUserBatchWalletRetryCoordinator({
+    const first = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => 'wallet-key-2',
@@ -68,7 +144,7 @@ describe('user batch wallet idempotency', () => {
     const sendFailure = new Error('connection lost')
     await expect(first.execute(walletRequest, async () => { throw sendFailure })).rejects.toBe(sendFailure)
 
-    const reopened = createUserBatchWalletRetryCoordinator({
+    const reopened = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => 'must-not-be-used',
@@ -86,7 +162,7 @@ describe('user batch wallet idempotency', () => {
   })
 
   it('keeps unresolved requests in persistent browser storage across coordinators', async () => {
-    const first = createUserBatchWalletRetryCoordinator({
+    const first = createCoordinator({
       createKey: () => 'wallet-key-persistent',
       scope: () => 'admin-1',
     })
@@ -94,7 +170,7 @@ describe('user batch wallet idempotency', () => {
       throw new Error('connection lost')
     })).rejects.toThrow('connection lost')
 
-    const reopened = createUserBatchWalletRetryCoordinator({ scope: () => 'admin-1' })
+    const reopened = createCoordinator({ scope: () => 'admin-1' })
     const pending = reopened.getPending()
     expect(pending?.request).toEqual({
       ...walletRequest,
@@ -111,7 +187,7 @@ describe('user batch wallet idempotency', () => {
 
   it('keeps unresolved requests isolated by authenticated administrator', async () => {
     const storage = createStorage()
-    const adminA = createUserBatchWalletRetryCoordinator({
+    const adminA = createCoordinator({
       storage,
       fallback: testFallback,
       scope: () => 'admin-a',
@@ -120,7 +196,7 @@ describe('user batch wallet idempotency', () => {
     await expect(adminA.execute(walletRequest, async () => { throw new Error('connection lost') }))
       .rejects.toThrow('connection lost')
 
-    const adminB = createUserBatchWalletRetryCoordinator({
+    const adminB = createCoordinator({
       storage,
       fallback: testFallback,
       scope: () => 'admin-b',
@@ -137,7 +213,7 @@ describe('user batch wallet idempotency', () => {
     const storage = createStorage()
     let scopeReads = 0
     const send = vi.fn(async () => response())
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage,
       fallback: testFallback,
       scope: () => (++scopeReads === 1 ? 'admin-a' : 'admin-b'),
@@ -153,13 +229,13 @@ describe('user batch wallet idempotency', () => {
 
   it('retains interrupted requests and reuses their key until a terminal response', async () => {
     const storage = createStorage()
-    const first = createUserBatchWalletRetryCoordinator({
+    const first = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => 'wallet-key-3',
     })
     await first.execute(walletRequest, async () => response(true))
-    const reopened = createUserBatchWalletRetryCoordinator({ storage, fallback: testFallback })
+    const reopened = createCoordinator({ storage, fallback: testFallback })
     const pending = reopened.getPending()
     const send = vi.fn(async () => response(true))
 
@@ -180,14 +256,14 @@ describe('user batch wallet idempotency', () => {
       ...walletRequest,
       selection: { filters: { search: 'active', is_active: undefined } },
     }
-    const first = createUserBatchWalletRetryCoordinator({
+    const first = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => 'wallet-key-filter',
     })
     await first.execute(requestWithUndefinedField, async () => response(true))
 
-    const reopened = createUserBatchWalletRetryCoordinator({ storage, fallback: testFallback })
+    const reopened = createCoordinator({ storage, fallback: testFallback })
     const send = vi.fn(async () => response())
     await reopened.execute({
       ...walletRequest,
@@ -204,7 +280,7 @@ describe('user batch wallet idempotency', () => {
   it('blocks changed payloads while unresolved and gives a later adjustment a new key', async () => {
     const storage = createStorage()
     let nextKey = 0
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => `wallet-key-${++nextKey}`,
@@ -240,7 +316,7 @@ describe('user batch wallet idempotency', () => {
       removeItem: () => undefined,
     }
     const send = vi.fn(async () => response(true))
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage: unavailableStorage,
       fallback: testFallback,
       createKey: () => 'wallet-key-fallback',
@@ -261,7 +337,7 @@ describe('user batch wallet idempotency', () => {
       removeItem: () => undefined,
     }
     const send = vi.fn(async () => response())
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage: mismatchedStorage,
       fallback: testFallback,
       createKey: () => 'wallet-key-readback',
@@ -281,7 +357,7 @@ describe('user batch wallet idempotency', () => {
       removeItem: () => undefined,
     }
     const send = vi.fn(async () => response())
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage: unavailableStorage,
       fallback: testFallback,
       createKey: () => 'must-not-be-used',
@@ -297,7 +373,7 @@ describe('user batch wallet idempotency', () => {
   it('fails closed when secure UUID generation is unavailable', async () => {
     const storage = createStorage()
     const send = vi.fn(async () => response())
-    const coordinator = createUserBatchWalletRetryCoordinator({
+    const coordinator = createCoordinator({
       storage,
       fallback: testFallback,
       createKey: () => { throw new WalletIdempotencyUnavailableError() },
