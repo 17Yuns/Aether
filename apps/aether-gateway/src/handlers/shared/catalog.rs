@@ -2392,7 +2392,7 @@ fn build_claude_code_quota_status_snapshot(
         "reset_at": reset_at,
         "reset_seconds": reset_seconds,
         "reset_credits": build_codex_reset_credits_status_snapshot(
-            &metadata,
+            metadata,
             observed_at_unix_secs,
         ),
         "windows": windows,
