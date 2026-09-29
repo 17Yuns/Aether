@@ -479,7 +479,7 @@ mod tests {
         let system = body["system"].as_array().unwrap();
         assert_eq!(system.len(), 3);
         let billing = system[0]["text"].as_str().unwrap();
-        assert!(billing.starts_with("x-anthropic-billing-header: cc_version=2.1.161."));
+        assert!(billing.starts_with("x-anthropic-billing-header: cc_version=2.1.284."));
         assert!(billing.ends_with("; cc_entrypoint=cli;"));
         assert!(system[0].get("cache_control").is_none());
         assert_eq!(system[1]["text"], CLAUDE_CODE_SYSTEM_PROMPT);
@@ -505,22 +505,22 @@ mod tests {
     fn fingerprint_uses_original_first_user_text_not_migrated_instructions() {
         let mut body = pi_body();
         apply_claude_code_body_mimicry(&mut body, CONTEXT);
-        let expected = claude_code_fingerprint("hello world, please help", "2.1.161");
+        let expected = claude_code_fingerprint("hello world, please help", "2.1.284");
         assert!(body["system"][0]["text"]
             .as_str()
             .unwrap()
-            .contains(&format!("cc_version=2.1.161.{expected};")));
+            .contains(&format!("cc_version=2.1.284.{expected};")));
     }
 
     #[test]
     fn fingerprint_is_three_hex_chars_and_pads_short_text_with_zero() {
-        let fp = claude_code_fingerprint("", "2.1.161");
+        let fp = claude_code_fingerprint("", "2.1.284");
         assert_eq!(fp.len(), 3);
         assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(fp, claude_code_fingerprint("abc", "2.1.161"));
+        assert_eq!(fp, claude_code_fingerprint("abc", "2.1.284"));
         assert_ne!(
-            claude_code_fingerprint("0123456789012345678901234", "2.1.161"),
-            claude_code_fingerprint("", "2.1.161")
+            claude_code_fingerprint("0123456789012345678901234", "2.1.284"),
+            claude_code_fingerprint("", "2.1.284")
         );
     }
 
