@@ -316,7 +316,7 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
 
     // Same-format requests skip `apply_transport_request_body_semantics`, so the opt-in
     // Claude Code body mimicry has to be applied here as well.
-    if crate::provider_transport::claude_code::apply_claude_code_body_mimicry_for_transport(
+    if crate::ai_serving::transport::claude_code::apply_claude_code_body_mimicry_for_transport(
         &mut base_provider_request_body,
         &transport,
         prepared.provider_api_format.as_str(),
