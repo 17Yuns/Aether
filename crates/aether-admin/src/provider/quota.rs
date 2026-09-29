@@ -466,6 +466,65 @@ pub fn parse_claude_code_oauth_usage_response(
     Some(serde_json::Value::Object(bucket))
 }
 
+/// Parses the `anthropic-ratelimit-unified-*` response headers into a partial `claude_code`
+/// metadata bucket (same field names as [`parse_claude_code_oauth_usage_response`]).
+///
+/// Utilization headers are 0-1 fractions and are stored as percent; reset headers are Unix
+/// seconds (millisecond values are normalized). Returns `None` when no window is reported.
+pub fn parse_claude_code_usage_headers(
+    headers: &BTreeMap<String, String>,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let normalized = headers
+        .iter()
+        .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let mut bucket = serde_json::Map::new();
+    for (header_window, prefix) in [
+        ("5h", "five_hour"),
+        ("7d", "seven_day"),
+        ("7d_oi", "seven_day_fable"),
+    ] {
+        let header = |suffix: &str| {
+            normalized
+                .get(&format!(
+                    "anthropic-ratelimit-unified-{header_window}-{suffix}"
+                ))
+                .map(String::as_str)
+        };
+        if let Some(utilization) = header("utilization")
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+        {
+            bucket.insert(
+                format!("{prefix}_used_percent"),
+                serde_json::json!((utilization * 100.0).clamp(0.0, 100.0)),
+            );
+        }
+        if let Some(reset_at) = header("reset")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| {
+                if value > 100_000_000_000 {
+                    value / 1_000
+                } else {
+                    value
+                }
+            })
+            .filter(|value| *value > 0)
+        {
+            bucket.insert(format!("{prefix}_reset_at"), serde_json::json!(reset_at));
+        }
+    }
+    if bucket.is_empty() {
+        return None;
+    }
+    bucket.insert(
+        "updated_at".to_string(),
+        serde_json::json!(updated_at_unix_secs),
+    );
+    Some(serde_json::Value::Object(bucket))
+}
+
 pub fn parse_gemini_cli_retrieve_user_quota_response(
     value: &serde_json::Value,
     updated_at_unix_secs: u64,
@@ -7769,8 +7828,53 @@ mod tests {
 
 #[cfg(test)]
 mod claude_code_quota_tests {
-    use super::parse_claude_code_oauth_usage_response;
+    use super::{parse_claude_code_oauth_usage_response, parse_claude_code_usage_headers};
     use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn parses_unified_ratelimit_headers_into_percent_and_reset() {
+        let headers = BTreeMap::from([
+            (
+                "Anthropic-Ratelimit-Unified-5h-Utilization".to_string(),
+                "0.42".to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-reset".to_string(),
+                "1800003600".to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d-utilization".to_string(),
+                "1.0".to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d-reset".to_string(),
+                "1800400000000".to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d_oi-utilization".to_string(),
+                "0.1".to_string(),
+            ),
+        ]);
+        let parsed =
+            parse_claude_code_usage_headers(&headers, 1_800_000_000).expect("headers should parse");
+
+        assert_eq!(parsed["five_hour_used_percent"], json!(42.0));
+        assert_eq!(parsed["five_hour_reset_at"], json!(1_800_003_600u64));
+        assert_eq!(parsed["seven_day_used_percent"], json!(100.0));
+        // Millisecond timestamps are normalized to seconds.
+        assert_eq!(parsed["seven_day_reset_at"], json!(1_800_400_000u64));
+        assert_eq!(parsed["seven_day_fable_used_percent"], json!(10.0));
+        assert!(parsed.get("seven_day_fable_reset_at").is_none());
+        assert_eq!(parsed["updated_at"], json!(1_800_000_000u64));
+    }
+
+    #[test]
+    fn unified_ratelimit_headers_absent_yield_none() {
+        let headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+        assert!(parse_claude_code_usage_headers(&headers, 1).is_none());
+    }
 
     #[test]
     fn parses_windows_and_skips_null_ones() {
