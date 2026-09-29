@@ -404,6 +404,68 @@ pub fn parse_antigravity_quota_summary_response(
     (!parsed_groups.is_empty()).then_some(serde_json::Value::Array(parsed_groups))
 }
 
+/// Windows reported by `GET /api/oauth/usage`, as `(response key, metadata prefix)`.
+pub const CLAUDE_CODE_USAGE_WINDOWS: [(&str, &str); 4] = [
+    ("five_hour", "five_hour"),
+    ("seven_day", "seven_day"),
+    ("seven_day_sonnet", "seven_day_sonnet"),
+    ("seven_day_overage_included", "seven_day_fable"),
+];
+
+/// Parses the Anthropic OAuth usage response into the `claude_code` metadata bucket.
+///
+/// Each window carries `utilization` (percent, 0-100) and `resets_at` (RFC 3339).
+/// Windows that are absent or `null` (e.g. plans without a Sonnet/Fable window) are
+/// skipped; `None` is returned when no window is present at all.
+pub fn parse_claude_code_oauth_usage_response(
+    value: &serde_json::Value,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let root = value.as_object()?;
+    let mut bucket = serde_json::Map::new();
+    for (response_key, prefix) in CLAUDE_CODE_USAGE_WINDOWS {
+        let Some(window) = root
+            .get(response_key)
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        let utilization = window
+            .get("utilization")
+            .and_then(|value| match value {
+                serde_json::Value::Number(number) => number.as_f64(),
+                serde_json::Value::String(text) => text.trim().parse::<f64>().ok(),
+                _ => None,
+            })
+            .filter(|value| value.is_finite());
+        let reset_at = window
+            .get("resets_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text.trim()).ok())
+            .and_then(|time| u64::try_from(time.timestamp()).ok());
+        if utilization.is_none() && reset_at.is_none() {
+            continue;
+        }
+        if let Some(utilization) = utilization {
+            bucket.insert(
+                format!("{prefix}_used_percent"),
+                serde_json::json!(utilization.clamp(0.0, 100.0)),
+            );
+        }
+        if let Some(reset_at) = reset_at {
+            bucket.insert(format!("{prefix}_reset_at"), serde_json::json!(reset_at));
+        }
+    }
+    if bucket.is_empty() {
+        return None;
+    }
+    bucket.insert(
+        "updated_at".to_string(),
+        serde_json::json!(updated_at_unix_secs),
+    );
+    Some(serde_json::Value::Object(bucket))
+}
+
 pub fn parse_gemini_cli_retrieve_user_quota_response(
     value: &serde_json::Value,
     updated_at_unix_secs: u64,
@@ -7702,5 +7764,39 @@ mod tests {
         let serialized = parsed.to_string();
         assert!(!serialized.contains("upstream-secret"));
         assert!(!serialized.contains("user:password"));
+    }
+}
+
+#[cfg(test)]
+mod claude_code_quota_tests {
+    use super::parse_claude_code_oauth_usage_response;
+    use serde_json::json;
+
+    #[test]
+    fn parses_windows_and_skips_null_ones() {
+        let parsed = parse_claude_code_oauth_usage_response(
+            &json!({
+                "five_hour": {"utilization": 37.5, "resets_at": "2027-01-15T08:00:00.000000+00:00"},
+                "seven_day": {"utilization": 12, "resets_at": "2027-01-20T00:00:00Z"},
+                "seven_day_sonnet": null,
+                "seven_day_overage_included": {"utilization": 3.0, "resets_at": null}
+            }),
+            1_800_000_000,
+        )
+        .expect("usage windows should parse");
+
+        assert_eq!(parsed["updated_at"], json!(1_800_000_000u64));
+        assert_eq!(parsed["five_hour_used_percent"], json!(37.5));
+        assert_eq!(parsed["five_hour_reset_at"], json!(1_800_000_000u64));
+        assert_eq!(parsed["seven_day_used_percent"], json!(12.0));
+        assert!(parsed.get("seven_day_sonnet_used_percent").is_none());
+        assert_eq!(parsed["seven_day_fable_used_percent"], json!(3.0));
+        assert!(parsed.get("seven_day_fable_reset_at").is_none());
+    }
+
+    #[test]
+    fn returns_none_without_any_window() {
+        assert!(parse_claude_code_oauth_usage_response(&json!({}), 1).is_none());
+        assert!(parse_claude_code_oauth_usage_response(&json!({"five_hour": null}), 1).is_none());
     }
 }
