@@ -539,6 +539,7 @@ export interface ClaudeCodeUpstreamMetadata {
   seven_day_sonnet_reset_at?: number
   seven_day_fable_used_percent?: number
   seven_day_fable_reset_at?: number
+  reset_credits?: QuotaResetCreditsSnapshot
 }
 
 export interface UpstreamMetadata {

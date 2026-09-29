@@ -441,6 +441,33 @@
                           </template>
                         </ProviderQuotaProgressRow>
                       </div>
+                      <div
+                        v-if="getClaudeCodeResetCreditAvailableCount(key) !== null"
+                        class="mt-3 border-t border-border/60 pt-2"
+                      >
+                        <div class="flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px] leading-4 text-muted-foreground">
+                          <span>{{ formatCodexResetCreditCountLabel(getClaudeCodeResetCreditAvailableCount(key)) }}</span>
+                          <template v-if="getVisibleClaudeCodeResetCreditItems(key).length > 0">
+                            <span aria-hidden="true">|</span>
+                            <span>{{ legacyT('临近过期') }}</span>
+                            <template
+                              v-for="(item, itemIndex) in getVisibleClaudeCodeResetCreditItems(key)"
+                              :key="`${item.displayKey}-${item.expiresAt}`"
+                            >
+                              <span
+                                :title="item.title"
+                                class="tabular-nums"
+                              >
+                                {{ item.displayKey }} {{ formatCodexResetCreditExpiresAt(item.expiresAt) }}
+                              </span>
+                              <span
+                                v-if="itemIndex < getVisibleClaudeCodeResetCreditItems(key).length - 1"
+                                aria-hidden="true"
+                              >·</span>
+                            </template>
+                          </template>
+                        </div>
+                      </div>
                     </div>
                     <!-- Gemini CLI 上游模型配额 -->
                     <div
@@ -3644,6 +3671,25 @@ function getClaudeCodeQuotaUpdatedAt(key: EndpointAPIKey): number | undefined {
   if (typeof quotaUpdatedAt === 'number') return quotaUpdatedAt
   const updatedAt = Number(key.upstream_metadata?.claude_code?.updated_at ?? NaN)
   return Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined
+}
+
+function getClaudeCodeResetCreditsDisplay(key: EndpointAPIKey): QuotaResetCreditsSnapshot | null {
+  return getQuotaSnapshotForProvider(key, 'claude_code')?.reset_credits
+    ?? key.upstream_metadata?.claude_code?.reset_credits
+    ?? null
+}
+
+function getClaudeCodeResetCreditAvailableCount(key: EndpointAPIKey): number | null {
+  return getCodexResetCreditAvailableCountFromSnapshot(getClaudeCodeResetCreditsDisplay(key))
+}
+
+function getVisibleClaudeCodeResetCreditItems(key: EndpointAPIKey) {
+  return getVisibleCodexResetCreditItemsFromSnapshot(
+    getClaudeCodeResetCreditsDisplay(key),
+    undefined,
+    5,
+    legacyT('Claude 重置机会'),
+  )
 }
 
 function hasClaudeCodeQuotaDisplayData(key: EndpointAPIKey): boolean {

@@ -1,4 +1,7 @@
 export const legacyAdminEnglishMessages: Record<string, string> = {
+  '缺少 OAuth 认证信息，请先授权/刷新 Token': 'Missing OAuth credentials; please authorize or refresh the token first',
+  'Key 状态写入失败': 'Failed to save key status',
+  '找不到有效的 claude:messages 端点': 'No active claude:messages endpoint found',
   '响应中未包含配额信息': 'The response contains no quota information',
   '响应中未包含额度窗口': 'The response contains no quota windows',
   'oauth/usage 请求执行失败': 'oauth/usage request failed',

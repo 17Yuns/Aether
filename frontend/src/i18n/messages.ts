@@ -3077,6 +3077,8 @@ const legacyDynamicPatterns: Array<[RegExp, (match: RegExpMatchArray) => string]
   [/^总可用：(.+)$/u, match => `Total available: ${match[1]}`],
   [/^余额：(.+)$/u, match => `Balance: ${match[1]}`],
   [/^oauth\/usage 返回状态码 (\d+)$/u, match => `oauth/usage returned status ${match[1]}`],
+  [/^共 (\d+) 次机会$/u, match => `${match[1]} ${match[1] === '1' ? 'chance' : 'chances'} in total`],
+  [/^已处理 (\d+) 个 Key$/u, match => `Processed ${match[1]} ${match[1] === '1' ? 'key' : 'keys'}`],
   [/^(.+) 秒$/u, match => `${translateLegacyText(match[1], 'en-US')}s`],
   [/^(.+) 分钟$/u, match => `${translateLegacyText(match[1], 'en-US')} min`],
   [/^(.+) 小时$/u, match => `${translateLegacyText(match[1], 'en-US')} h`],

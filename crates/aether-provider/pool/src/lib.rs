@@ -125,7 +125,10 @@ mod tests {
             ("authorization".to_string(), "Bearer access".to_string()),
         );
         assert_eq!(claude_spec.method, "GET");
-        assert_eq!(claude_spec.url, "https://api.anthropic.com/api/oauth/usage");
+        assert_eq!(
+            claude_spec.url,
+            "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
+        );
         assert_eq!(
             claude_spec
                 .headers

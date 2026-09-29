@@ -456,6 +456,9 @@ pub fn parse_claude_code_oauth_usage_response(
             bucket.insert(format!("{prefix}_reset_at"), serde_json::json!(reset_at));
         }
     }
+    if let Some(reset_credits) = parse_claude_code_reset_credits(root, updated_at_unix_secs) {
+        bucket.insert("reset_credits".to_string(), reset_credits);
+    }
     if bucket.is_empty() {
         return None;
     }
@@ -464,6 +467,73 @@ pub fn parse_claude_code_oauth_usage_response(
         serde_json::json!(updated_at_unix_secs),
     );
     Some(serde_json::Value::Object(bucket))
+}
+
+/// Projects the `cedar_ember` block (returned with `?cedar_ember=1`) into the same
+/// `reset_credits` shape codex uses. Upstream grant/organization ids are never copied; each
+/// usable grant becomes one entry, and `available_count` sums their remaining resets.
+fn parse_claude_code_reset_credits(
+    root: &serde_json::Map<String, serde_json::Value>,
+    now_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let grants = root
+        .get("cedar_ember")
+        .and_then(serde_json::Value::as_object)?
+        .get("grants")
+        .and_then(serde_json::Value::as_array)?;
+    let parse_time = |grant: &serde_json::Map<String, serde_json::Value>, field: &str| {
+        grant
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text.trim()).ok())
+            .and_then(|time| u64::try_from(time.timestamp()).ok())
+    };
+    let mut available_count = 0u64;
+    let mut credits = Vec::new();
+    for grant in grants.iter().filter_map(serde_json::Value::as_object) {
+        let resets_left = grant
+            .get("resets_left")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let has_clears = grant
+            .get("clears")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|clears| !clears.is_empty());
+        let paused = grant
+            .get("paused")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let starts_at = parse_time(grant, "starts_at");
+        let expires_at = parse_time(grant, "ends_at");
+        if resets_left == 0
+            || !has_clears
+            || paused
+            || starts_at.is_some_and(|value| value > now_unix_secs)
+            || expires_at.is_some_and(|value| value <= now_unix_secs)
+        {
+            continue;
+        }
+        available_count += resets_left;
+        let Some(expires_at) = expires_at else {
+            continue;
+        };
+        credits.push(serde_json::json!({
+            "display_key": format!("Key-{}", credits.len() + 1),
+            "status": "available",
+            "expires_at": expires_at,
+            "remaining_seconds": expires_at - now_unix_secs,
+        }));
+    }
+    if available_count == 0 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "available_count": available_count,
+        "updated_at": now_unix_secs,
+        "detail_source": "claude_oauth_usage",
+        "detail_status": "ok",
+        "credits": credits,
+    }))
 }
 
 /// Parses the `anthropic-ratelimit-unified-*` response headers into a partial `claude_code`
@@ -7831,6 +7901,48 @@ mod claude_code_quota_tests {
     use super::{parse_claude_code_oauth_usage_response, parse_claude_code_usage_headers};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn parses_cedar_ember_grants_into_reset_credits() {
+        let parsed = parse_claude_code_oauth_usage_response(
+            &json!({
+                "five_hour": {"utilization": 65.0, "resets_at": "2027-01-15T08:00:00Z"},
+                "cedar_ember": {
+                    "eligible": true,
+                    "grants": [
+                        {"id": "launch", "resets_left": 2, "clears": ["five_hour"],
+                         "ends_at": "2027-01-20T00:00:00Z"},
+                        {"id": "later", "resets_left": 1, "clears": ["five_hour"],
+                         "starts_at": "2027-02-01T00:00:00Z"},
+                        {"id": "paused", "resets_left": 1, "clears": ["five_hour"], "paused": true},
+                        {"id": "spent", "resets_left": 0, "clears": ["five_hour"]},
+                        {"id": "expired", "resets_left": 1, "clears": ["five_hour"],
+                         "ends_at": "2027-01-01T00:00:00Z"}
+                    ]
+                }
+            }),
+            1_800_000_000,
+        )
+        .expect("usage should parse");
+
+        let credits = &parsed["reset_credits"];
+        assert_eq!(credits["available_count"], json!(2));
+        assert_eq!(credits["credits"].as_array().map(Vec::len), Some(1));
+        assert_eq!(credits["credits"][0]["display_key"], json!("Key-1"));
+        assert_eq!(credits["credits"][0]["expires_at"], json!(1_800_403_200u64));
+        assert!(credits["credits"][0].get("id").is_none());
+        assert!(!credits.to_string().contains("launch"));
+    }
+
+    #[test]
+    fn cedar_ember_null_or_empty_omits_reset_credits() {
+        let parsed = parse_claude_code_oauth_usage_response(
+            &json!({"five_hour": {"utilization": 1.0}, "cedar_ember": null}),
+            1,
+        )
+        .expect("usage should parse");
+        assert!(parsed.get("reset_credits").is_none());
+    }
 
     #[test]
     fn parses_unified_ratelimit_headers_into_percent_and_reset() {

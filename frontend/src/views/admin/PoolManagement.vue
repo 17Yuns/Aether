@@ -2274,7 +2274,19 @@ function getPendingCodexResetCreditIdempotencyKey(key: PoolKeyDetail): string | 
     : readPendingCodexResetCreditIdempotencyKey(key.key_id, generation)
 }
 
+function getClaudeCodeResetCredits(key: PoolKeyDetail) {
+  if (getQuotaSnapshotProviderType(key) !== 'claude_code') return null
+  return key.status_snapshot?.quota?.reset_credits
+    ?? key.upstream_metadata?.claude_code?.reset_credits
+    ?? null
+}
+
 function getCodexResetCreditCountText(key: PoolKeyDetail): string | null {
+  const claudeCredits = getClaudeCodeResetCredits(key)
+  if (claudeCredits) {
+    const claudeCount = getCodexResetCreditAvailableCount(claudeCredits)
+    return claudeCount === null ? null : formatCodexResetCreditCount(claudeCount)
+  }
   const count = getCodexResetCreditAvailableCount(getCodexResetCredits(key))
   return count === null && !getPendingCodexResetCreditIdempotencyKey(key)
     ? null
@@ -2282,7 +2294,11 @@ function getCodexResetCreditCountText(key: PoolKeyDetail): string | null {
 }
 
 function getCodexResetCreditItemTexts(key: PoolKeyDetail): string[] {
-  return getVisibleCodexResetCreditItems(getCodexResetCredits(key), undefined, 3)
+  return getVisibleCodexResetCreditItems(
+    getClaudeCodeResetCredits(key) ?? getCodexResetCredits(key),
+    undefined,
+    3,
+  )
     .map(item => `${item.displayKey} ${formatCodexResetCreditExpiresAt(item.expiresAt)}`)
 }
 

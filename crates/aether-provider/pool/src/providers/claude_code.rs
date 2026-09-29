@@ -8,7 +8,8 @@ use crate::provider::{
 };
 use crate::quota_refresh::ProviderPoolQuotaRequestSpec;
 
-pub const CLAUDE_CODE_OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+pub const CLAUDE_CODE_OAUTH_USAGE_URL: &str =
+    "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
 pub const CLAUDE_CODE_OAUTH_BETA: &str = "oauth-2025-04-20";
 pub const CLAUDE_CODE_USAGE_USER_AGENT: &str = "claude-code/2.1.284";
 
@@ -43,7 +44,7 @@ impl ProviderPoolAdapter for ClaudeCodeProviderPoolAdapter {
 }
 
 /// Builds the `GET /api/oauth/usage` request that reports the account's 5h / 7d
-/// utilization windows. The URL is fixed (the origin allowlist only accepts
+/// utilization windows (and, via `cedar_ember=1`, its quota reset credits). The URL is fixed (the origin allowlist only accepts
 /// `api.anthropic.com`), independent of the inference endpoint's base URL.
 pub fn build_claude_code_pool_quota_request(
     key_id: &str,

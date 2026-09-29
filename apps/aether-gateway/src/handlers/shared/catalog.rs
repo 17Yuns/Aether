@@ -2391,6 +2391,10 @@ fn build_claude_code_quota_status_snapshot(
         "updated_at": observed_at_unix_secs,
         "reset_at": reset_at,
         "reset_seconds": reset_seconds,
+        "reset_credits": build_codex_reset_credits_status_snapshot(
+            &metadata,
+            observed_at_unix_secs,
+        ),
         "windows": windows,
     }))
 }
@@ -3850,7 +3854,17 @@ mod tests {
                 "seven_day_used_percent": 40.0,
                 "seven_day_reset_at": 1_800_400_000u64,
                 "seven_day_sonnet_used_percent": 10.0,
-                "seven_day_sonnet_reset_at": 1_800_400_000u64
+                "seven_day_sonnet_reset_at": 1_800_400_000u64,
+                "reset_credits": {
+                    "available_count": 2,
+                    "updated_at": 1_800_000_000u64,
+                    "detail_source": "claude_oauth_usage",
+                    "credits": [{
+                        "display_key": "Key-1",
+                        "status": "available",
+                        "expires_at": 1_800_144_000u64
+                    }]
+                }
             }
         }));
 
@@ -3875,6 +3889,11 @@ mod tests {
         assert_eq!(windows[1]["used_ratio"], json!(0.4));
         assert_eq!(windows[2]["code"], json!("weekly_sonnet"));
         assert_eq!(windows[2]["scope"], json!("model"));
+        assert_eq!(quota["reset_credits"]["available_count"], json!(2));
+        assert_eq!(
+            quota["reset_credits"]["credits"][0]["remaining_seconds"],
+            json!(144_000u64)
+        );
     }
 
     #[test]
