@@ -456,12 +456,15 @@ pub fn parse_claude_code_oauth_usage_response(
             bucket.insert(format!("{prefix}_reset_at"), serde_json::json!(reset_at));
         }
     }
-    if let Some(reset_credits) = parse_claude_code_reset_credits(root, updated_at_unix_secs) {
-        bucket.insert("reset_credits".to_string(), reset_credits);
-    }
     if bucket.is_empty() {
         return None;
     }
+    // Explicit null so a refresh overwrites (rather than keeps) credits that were used up.
+    bucket.insert(
+        "reset_credits".to_string(),
+        parse_claude_code_reset_credits(root, updated_at_unix_secs)
+            .unwrap_or(serde_json::Value::Null),
+    );
     bucket.insert(
         "updated_at".to_string(),
         serde_json::json!(updated_at_unix_secs),
@@ -7935,13 +7938,52 @@ mod claude_code_quota_tests {
     }
 
     #[test]
+    fn real_cedar_ember_response_survives_metadata_redaction() {
+        // Shape captured from a live Claude Pro account (unrelated fields trimmed).
+        let parsed = parse_claude_code_oauth_usage_response(
+            &json!({
+                "five_hour": {"utilization": 32.0, "resets_at": "2026-09-29T19:19:59.933008+00:00"},
+                "cedar_ember": {
+                    "eligible": true,
+                    "at_limit": false,
+                    "grants": [{
+                        "id": "opus55-launch-promax-20260921",
+                        "label": "Claude Opus 5.5 launch",
+                        "resets_total": 1,
+                        "resets_left": 1,
+                        "starts_at": "2026-09-22T16:00:00+00:00",
+                        "ends_at": "2026-10-22T16:00:00+00:00",
+                        "clears": ["five_hour", "seven_day"],
+                        "paused": false,
+                        "usable_now": true,
+                        "use_requires_limit": false
+                    }],
+                    "next_grant_id": "opus55-launch-promax-20260921"
+                }
+            }),
+            1_790_699_000,
+        )
+        .expect("usage should parse");
+        assert_eq!(parsed["reset_credits"]["available_count"], json!(1));
+
+        let safe = crate::provider::redaction::admin_provider_upstream_metadata_safe_json(Some(
+            &json!({ "claude_code": parsed }),
+        ));
+        assert_eq!(
+            safe["claude_code"]["reset_credits"]["available_count"],
+            json!(1),
+            "redaction dropped reset_credits: {safe}"
+        );
+    }
+
+    #[test]
     fn cedar_ember_null_or_empty_omits_reset_credits() {
         let parsed = parse_claude_code_oauth_usage_response(
             &json!({"five_hour": {"utilization": 1.0}, "cedar_ember": null}),
             1,
         )
         .expect("usage should parse");
-        assert!(parsed.get("reset_credits").is_none());
+        assert!(parsed["reset_credits"].is_null());
     }
 
     #[test]
