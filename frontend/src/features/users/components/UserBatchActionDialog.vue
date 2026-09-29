@@ -44,10 +44,17 @@
         class="space-y-3 rounded-xl border border-border bg-background p-4"
       >
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <Label for="user-batch-wallet-amount" class="text-sm font-medium">
+          <Label
+            for="user-batch-wallet-amount"
+            class="text-sm font-medium"
+          >
             {{ legacyT('调整金额 (USD)') }}
           </Label>
-          <div class="inline-flex rounded-md border border-border p-0.5" role="group" :aria-label="legacyT('余额调整方式')">
+          <div
+            class="inline-flex rounded-md border border-border p-0.5"
+            role="group"
+            :aria-label="legacyT('余额调整方式')"
+          >
             <Button
               type="button"
               size="sm"
@@ -80,7 +87,10 @@
           :aria-invalid="balanceAmount !== '' && balancePayload === null"
           @update:model-value="balanceAmount = String($event)"
         />
-        <p v-if="balanceAmount !== '' && balancePayload === null" class="text-xs text-destructive">
+        <p
+          v-if="balanceAmount !== '' && balancePayload === null"
+          class="text-xs text-destructive"
+        >
           {{ legacyT('请输入大于 0 的有限金额') }}
         </p>
         <p class="text-xs leading-relaxed text-muted-foreground">
