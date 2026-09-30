@@ -45,7 +45,7 @@ impl std::fmt::Debug for AdminProviderOpsCredentialSnapshot {
 pub(super) struct AdminProviderOpsMergedCredentialSnapshot {
     pub(super) provider: StoredProviderCatalogProvider,
     pub(super) credentials: serde_json::Map<String, serde_json::Value>,
-    pub(super) saved_binding: ProviderOpsCredentialBinding,
+    pub(super) saved_binding: Option<ProviderOpsCredentialBinding>,
     pub(super) reused_saved_secret: bool,
 }
 
@@ -203,9 +203,24 @@ pub(super) async fn admin_provider_ops_merge_credentials(
     provider: &StoredProviderCatalogProvider,
     mut request_credentials: serde_json::Map<String, serde_json::Value>,
 ) -> Result<AdminProviderOpsMergedCredentialSnapshot, String> {
+    if admin_provider_ops_config_object(provider).is_none() {
+        return Ok(AdminProviderOpsMergedCredentialSnapshot {
+            provider: provider.clone(),
+            credentials: request_credentials,
+            saved_binding: None,
+            reused_saved_secret: false,
+        });
+    }
     let snapshot = admin_provider_ops_credential_snapshot(state, provider)
         .await
-        .map_err(|_| "已保存的 Provider Ops 凭据无法解密或迁移".to_string())?;
+        .map_err(|error| match error {
+            GatewayError::Internal(message)
+                if message.starts_with("已保存的 Provider Ops 凭据无法解密:") =>
+            {
+                message
+            }
+            _ => "已保存的 Provider Ops 凭据无法解密或迁移".to_string(),
+        })?;
     let mut saved_credentials = snapshot.credentials;
     let preserve_internal_runtime_fields =
         admin_provider_ops_pure::normalize_architecture_id(architecture_id) == "sub2api";
@@ -239,7 +254,7 @@ pub(super) async fn admin_provider_ops_merge_credentials(
     Ok(AdminProviderOpsMergedCredentialSnapshot {
         provider: snapshot.provider,
         credentials: request_credentials,
-        saved_binding: snapshot.binding,
+        saved_binding: Some(snapshot.binding),
         reused_saved_secret,
     })
 }
@@ -452,14 +467,33 @@ pub(super) async fn build_admin_provider_ops_saved_config_value(
         payload.connector.credentials,
     )
     .await?;
-    let canonical_base_url = payload
+    let base_url = payload
         .base_url
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| merged.saved_binding.destination.base_url());
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            merged
+                .saved_binding
+                .as_ref()
+                .map(|binding| binding.destination.base_url().to_string())
+        });
+    let base_url = match base_url {
+        Some(base_url) => base_url,
+        None => {
+            let endpoints = state
+                .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(
+                    &merged.provider.id,
+                ))
+                .await
+                .map_err(|_| "无法读取 Provider Ops 目标地址".to_string())?;
+            resolve_admin_provider_ops_base_url(&merged.provider, &endpoints, None)
+                .ok_or_else(|| "请提供 API 地址".to_string())?
+        }
+    };
     let canonical_destination =
-        canonicalize_provider_ops_base_url(canonical_base_url).map_err(ToString::to_string)?;
+        canonicalize_provider_ops_base_url(&base_url).map_err(ToString::to_string)?;
 
     let actions = payload
         .actions
@@ -494,15 +528,21 @@ pub(super) async fn build_admin_provider_ops_saved_config_value(
             .ok_or_else(|| "Provider Ops 配置格式无效".to_string())?,
         canonical_destination.base_url(),
     )?;
-    let same_secret_destination = merged.saved_binding.provider_id == new_binding.provider_id
-        && merged.saved_binding.architecture_id == new_binding.architecture_id
-        && merged.saved_binding.auth_type == new_binding.auth_type
-        && merged.saved_binding.destination == new_binding.destination;
+    let same_secret_destination = merged.saved_binding.as_ref().is_some_and(|saved_binding| {
+        saved_binding.provider_id == new_binding.provider_id
+            && saved_binding.architecture_id == new_binding.architecture_id
+            && saved_binding.auth_type == new_binding.auth_type
+            && saved_binding.destination == new_binding.destination
+    });
     if merged.reused_saved_secret && !same_secret_destination {
         return Err("修改 Provider Ops 架构、认证类型或目标地址时必须重新填写凭据".to_string());
     }
     let mut merged_credentials = merged.credentials;
-    if merged.saved_binding != new_binding {
+    if merged
+        .saved_binding
+        .as_ref()
+        .is_some_and(|saved_binding| saved_binding != &new_binding)
+    {
         for field in PROVIDER_OPS_TRANSIENT_METADATA_FIELDS {
             merged_credentials.remove(*field);
         }
@@ -638,17 +678,21 @@ pub(super) async fn build_admin_provider_ops_config_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{admin_provider_ops_credential_snapshot, open_provider_ops_credential};
+    use super::{
+        admin_provider_ops_binding_from_config, admin_provider_ops_credential_snapshot,
+        admin_provider_ops_merge_credentials, build_admin_provider_ops_saved_config_value,
+        open_provider_ops_credential, AdminProviderOpsSaveConfigRequest,
+    };
     use crate::data::GatewayDataState;
     use crate::handlers::admin::request::AdminAppState;
     use crate::AppState;
     use aether_crypto::{
-        decrypt_python_fernet_ciphertext, encrypt_python_fernet_plaintext,
-        looks_like_python_fernet_ciphertext, DEVELOPMENT_ENCRYPTION_KEY,
+        encrypt_python_fernet_plaintext, looks_like_python_fernet_ciphertext,
+        DEVELOPMENT_ENCRYPTION_KEY,
     };
     use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
     use aether_data_contracts::repository::provider_catalog::{
-        ProviderCatalogReadRepository, StoredProviderCatalogProvider,
+        ProviderCatalogReadRepository, StoredProviderCatalogEndpoint, StoredProviderCatalogProvider,
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -695,9 +739,16 @@ mod tests {
     fn state_with_provider(
         provider: StoredProviderCatalogProvider,
     ) -> (AppState, Arc<InMemoryProviderCatalogReadRepository>) {
+        state_with_provider_and_endpoints(provider, Vec::new())
+    }
+
+    fn state_with_provider_and_endpoints(
+        provider: StoredProviderCatalogProvider,
+        endpoints: Vec<StoredProviderCatalogEndpoint>,
+    ) -> (AppState, Arc<InMemoryProviderCatalogReadRepository>) {
         let repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
             vec![provider],
-            Vec::new(),
+            endpoints,
             Vec::new(),
         ));
         let state = AppState::new()
@@ -707,6 +758,19 @@ mod tests {
                     .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
             );
         (state, repository)
+    }
+
+    fn save_request(base_url: Option<&str>, api_key: &str) -> AdminProviderOpsSaveConfigRequest {
+        serde_json::from_value(json!({
+            "architecture_id": "generic_api",
+            "base_url": base_url,
+            "connector": {
+                "auth_type": "api_key",
+                "config": {},
+                "credentials": { "api_key": api_key }
+            }
+        }))
+        .expect("save request should parse")
     }
 
     async fn stored_provider(
@@ -719,6 +783,165 @@ mod tests {
             .into_iter()
             .next()
             .expect("provider should exist")
+    }
+
+    #[tokio::test]
+    async fn first_sub2api_save_encrypts_credentials_without_a_saved_config() {
+        for config in [None, Some(json!({})), Some(json!({"feature_flag": true}))] {
+            let mut provider = provider_with_api_key(TEST_API_KEY);
+            provider.config = config.clone();
+            let (state, repository) = state_with_provider(provider.clone());
+            let request = serde_json::from_value(json!({
+                "architecture_id": "sub2api",
+                "base_url": " HTTPS://Provider.Example.COM:443/ ",
+                "connector": {
+                    "auth_type": "session_login",
+                    "config": { "auth_method": "jwt" },
+                    "credentials": {
+                        "email": "user@example.com",
+                        "password": "test-login-password"
+                    }
+                },
+                "quota_alert": {
+                    "enabled": true,
+                    "threshold_amount": 2,
+                    "fetch_interval_seconds": 30
+                }
+            }))
+            .expect("Sub2API save request should parse");
+
+            let saved = build_admin_provider_ops_saved_config_value(
+                &AdminAppState::new(&state),
+                &provider,
+                request,
+            )
+            .await
+            .expect("first Sub2API configuration should save");
+            assert_eq!(saved.provider.config, config);
+            let ops_config = saved.provider_ops_config;
+            assert_eq!(ops_config["base_url"], "https://provider.example.com");
+            assert_eq!(
+                ops_config["connector"]["credentials"]["email"],
+                "user@example.com"
+            );
+            assert_eq!(ops_config["quota_alert"]["threshold_amount"], 2.0);
+            let binding = admin_provider_ops_binding_from_config(
+                TEST_PROVIDER_ID,
+                ops_config.as_object().expect("config should be an object"),
+                "https://provider.example.com",
+            )
+            .expect("credential binding should build");
+            let password = ops_config["connector"]["credentials"]["password"]
+                .as_str()
+                .expect("password should be encrypted");
+            assert!(password.starts_with("aether-provider-ops-credential-v2:"));
+            assert_eq!(
+                open_provider_ops_credential(&state, &binding, "password", password)
+                    .expect("saved password should decrypt with its binding")
+                    .plaintext,
+                "test-login-password"
+            );
+            assert_eq!(stored_provider(repository.as_ref()).await.config, config);
+        }
+    }
+
+    #[tokio::test]
+    async fn first_provider_ops_save_resolves_existing_provider_addresses() {
+        for source in ["website", "provider_config", "endpoint"] {
+            let mut provider = provider_with_api_key(TEST_API_KEY);
+            provider.config = None;
+            provider.website = Some("https://website.example.com/".to_string());
+            let mut endpoints = Vec::new();
+            let expected_base_url = match source {
+                "provider_config" => {
+                    provider.config = Some(json!({"base_url": "https://config.example.com/"}));
+                    "https://config.example.com"
+                }
+                "endpoint" => {
+                    let mut endpoint = StoredProviderCatalogEndpoint::new(
+                        "ops-test-endpoint".to_string(),
+                        TEST_PROVIDER_ID.to_string(),
+                        "openai:chat".to_string(),
+                        None,
+                        None,
+                        true,
+                    )
+                    .expect("endpoint should build");
+                    endpoint.base_url = "https://endpoint.example.com/".to_string();
+                    endpoints.push(endpoint);
+                    "https://endpoint.example.com"
+                }
+                _ => "https://website.example.com",
+            };
+            let (state, _) = state_with_provider_and_endpoints(provider.clone(), endpoints);
+            let saved = build_admin_provider_ops_saved_config_value(
+                &AdminAppState::new(&state),
+                &provider,
+                save_request(None, TEST_API_KEY),
+            )
+            .await
+            .expect("first configuration should use the provider address");
+            assert_eq!(saved.provider_ops_config["base_url"], expected_base_url);
+        }
+    }
+
+    #[tokio::test]
+    async fn first_provider_ops_save_without_an_address_reports_the_missing_url() {
+        let mut provider = provider_with_api_key(TEST_API_KEY);
+        provider.config = None;
+        let (state, _) = state_with_provider(provider.clone());
+        let error = build_admin_provider_ops_saved_config_value(
+            &AdminAppState::new(&state),
+            &provider,
+            save_request(None, TEST_API_KEY),
+        )
+        .await
+        .err()
+        .expect("a destination is required");
+        assert_eq!(error, "请提供 API 地址");
+    }
+
+    #[tokio::test]
+    async fn saved_provider_ops_secret_can_be_reused_only_for_the_same_destination() {
+        let provider = provider_with_api_key(TEST_API_KEY);
+        let (state, repository) = state_with_provider(provider.clone());
+        let admin_state = AdminAppState::new(&state);
+        let saved = build_admin_provider_ops_saved_config_value(
+            &admin_state,
+            &provider,
+            save_request(None, "********"),
+        )
+        .await
+        .expect("masked credentials should reuse the saved secret");
+        let binding = admin_provider_ops_binding_from_config(
+            TEST_PROVIDER_ID,
+            saved
+                .provider_ops_config
+                .as_object()
+                .expect("config should be an object"),
+            "https://provider.example.com",
+        )
+        .expect("credential binding should build");
+        let api_key = saved.provider_ops_config["connector"]["credentials"]["api_key"]
+            .as_str()
+            .expect("API key should be encrypted");
+        assert_eq!(
+            open_provider_ops_credential(&state, &binding, "api_key", api_key)
+                .expect("reused API key should decrypt")
+                .plaintext,
+            TEST_API_KEY
+        );
+
+        let current = stored_provider(repository.as_ref()).await;
+        let error = build_admin_provider_ops_saved_config_value(
+            &admin_state,
+            &current,
+            save_request(Some("https://other.example.com"), "********"),
+        )
+        .await
+        .err()
+        .expect("saved secrets must not be reused for a different destination");
+        assert!(error.contains("必须重新填写凭据"));
     }
 
     #[tokio::test]
@@ -768,6 +991,24 @@ mod tests {
             .await
             .expect_err("tampered Provider Ops ciphertext must not be used as plaintext");
         assert!(format!("{error:?}").contains("无法解密"));
+
+        let merge_error = admin_provider_ops_merge_credentials(
+            &admin_state,
+            "generic_api",
+            &provider,
+            json!({"api_key": "replacement-api-key"})
+                .as_object()
+                .expect("credentials should be an object")
+                .clone(),
+        )
+        .await
+        .err()
+        .expect("tampered saved credentials must not be silently replaced");
+        assert_eq!(
+            merge_error,
+            "已保存的 Provider Ops 凭据无法解密: 历史 Provider Ops credential 密文无法解密"
+        );
+        assert!(!merge_error.contains(&tampered));
 
         let stored = stored_provider(repository.as_ref()).await;
         assert_eq!(
