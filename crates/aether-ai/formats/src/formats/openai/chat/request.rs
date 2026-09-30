@@ -5,8 +5,8 @@ use crate::{
     protocol::canonical::{
         canonical_extension_object_mut, canonical_message_to_openai_chat_messages,
         canonical_response_format_to_openai, canonical_tool_choice_to_openai,
-        canonical_tool_is_openai_custom, canonical_tool_to_openai, is_claude_tool_result,
-        namespace_extension_object, openai_content_text, openai_extensions,
+        canonical_tool_is_openai_custom, canonical_tool_to_openai, is_claude_messages_request,
+        is_claude_tool_result, namespace_extension_object, openai_content_text, openai_extensions,
         openai_generation_config, openai_message_content_blocks,
         openai_response_format_to_canonical, openai_responses_extension, openai_role_to_canonical,
         openai_tool_choice_raw_to_chat, openai_tool_choice_to_canonical, openai_tools_to_canonical,
@@ -178,6 +178,13 @@ fn to_raw_with_namespace_aliases(
     output.insert("messages".to_string(), Value::Array(messages));
 
     write_openai_generation_config(&mut output, &canonical.generation);
+    if is_claude_messages_request(&canonical.extensions)
+        && !openai_chat_uses_max_completion_tokens(&canonical.model)
+    {
+        if let Some(max_tokens) = output.remove("max_completion_tokens") {
+            output.insert("max_tokens".to_string(), max_tokens);
+        }
+    }
     if !canonical.tools.is_empty() {
         let mut tools = Vec::new();
         for (tool_index, tool) in canonical.tools.iter().enumerate() {
@@ -245,6 +252,56 @@ fn to_raw_with_namespace_aliases(
         &output,
     ));
     Value::Object(output)
+}
+
+fn openai_chat_uses_max_completion_tokens(model: &str) -> bool {
+    if model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model == "gpt-5"
+        || model.starts_with("gpt-5-")
+        || model.starts_with("gpt-5.")
+    {
+        return true;
+    }
+    for base in ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] {
+        if model == base {
+            return true;
+        }
+        let Some(snapshot) = model
+            .strip_prefix(base)
+            .and_then(|value| value.strip_prefix('-'))
+        else {
+            continue;
+        };
+        let bytes = snapshot.as_bytes();
+        if bytes.len() != 10
+            || bytes[4] != b'-'
+            || bytes[7] != b'-'
+            || bytes
+                .iter()
+                .enumerate()
+                .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let year = bytes[..4]
+            .iter()
+            .fold(0_u16, |year, byte| year * 10 + u16::from(byte - b'0'));
+        let month = (bytes[5] - b'0') * 10 + bytes[6] - b'0';
+        let day = (bytes[8] - b'0') * 10 + bytes[9] - b'0';
+        let days_in_month = match month {
+            4 | 6 | 9 | 11 => 30,
+            2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+            2 => 28,
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            _ => continue,
+        };
+        if day > 0 && day <= days_in_month {
+            return true;
+        }
+    }
+    false
 }
 
 fn canonical_tool_choice_to_openai_for_request(

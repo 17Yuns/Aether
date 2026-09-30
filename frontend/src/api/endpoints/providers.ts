@@ -236,6 +236,7 @@ export interface TestModelRequest {
   endpoint_id?: string
   message?: string
   api_format?: string
+  client_api_format?: string
   mode?: 'global' | 'direct' | 'pool'
   apply_model_mapping?: boolean
   mapped_model_name?: string
@@ -288,6 +289,7 @@ export interface TestModelFailoverRequest {
   failover_models?: string[]
   api_key_ids?: string[]
   api_format?: string
+  client_api_format?: string
   endpoint_id?: string
   message?: string
   apply_model_mapping?: boolean

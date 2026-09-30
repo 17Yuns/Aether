@@ -31,7 +31,7 @@
       >
         <div class="grid min-h-8 w-full items-center gap-2 sm:h-8 sm:grid-cols-2">
           <div class="text-sm font-medium text-foreground">
-            选择测试端点
+            选择上游端点
           </div>
           <div
             v-if="modelMappingAvailable"
@@ -97,6 +97,36 @@
             </div>
           </button>
         </div>
+      </div>
+
+      <div
+        v-if="clientApiFormats.length > 0"
+        class="space-y-2"
+      >
+        <div class="text-sm font-medium text-foreground">
+          请求协议
+        </div>
+        <Select
+          :model-value="selectedClientApiFormat"
+          @update:model-value="value => emit('selectClientApiFormat', String(value))"
+        >
+          <SelectTrigger class="h-9 w-full border-border/60 text-xs">
+            <SelectValue placeholder="选择请求协议" />
+          </SelectTrigger>
+          <SelectContent :searchable="false">
+            <SelectItem
+              v-for="apiFormat in clientApiFormats"
+              :key="apiFormat"
+              :value="apiFormat"
+              :text-value="formatApiFormat(apiFormat)"
+            >
+              {{ formatApiFormat(apiFormat) }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p class="text-xs text-muted-foreground">
+          请求会转换为所选上游端点的协议。
+        </p>
       </div>
 
       <div
@@ -837,6 +867,8 @@ const props = defineProps<{
   requestedModelName?: string | null
   endpoints?: TestEndpointOption[]
   selectedEndpoint?: TestEndpointOption | null
+  clientApiFormats?: string[]
+  selectedClientApiFormat?: string
   testing?: boolean
   trace?: RequestTrace | null
   requestId?: string | null
@@ -860,6 +892,7 @@ const emit = defineEmits<{
   back: []
   start: []
   selectEndpoint: [endpointId: string]
+  selectClientApiFormat: [apiFormat: string]
   selectModelMapping: [modelName: string]
   'update:selectedKeyIds': [value: string[]]
   'update:requestHeadersDraft': [value: string]
@@ -867,6 +900,7 @@ const emit = defineEmits<{
 }>()
 
 const endpoints = computed(() => props.endpoints ?? [])
+const clientApiFormats = computed(() => props.clientApiFormats ?? [])
 const modelMappingOptions = computed(() => props.modelMappingOptions ?? [])
 const keyOptions = computed(() => props.keyOptions ?? [])
 const selectedKeyIds = computed(() => props.selectedKeyIds ?? [])

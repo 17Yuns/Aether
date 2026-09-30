@@ -1433,24 +1433,15 @@ mod tests {
                     provider_api_format,
                     "openai:responses" | "openai:responses:compact"
                 ) {
-                    assert!(converted.get("instructions").is_none());
-                    assert_eq!(converted["input"][0]["role"], "developer");
-                    assert_eq!(converted["input"][0]["content"][0]["text"], "Be exact.");
-                    assert_eq!(converted["max_output_tokens"], 128);
-                    assert_eq!(converted["text"]["verbosity"], "medium");
+                    assert_eq!(converted["instructions"], "Be exact.");
+                    assert_eq!(converted["input"][0]["role"], "user");
+                    assert_eq!(converted["input"][0]["content"][0]["text"], "Inspect this");
+                    assert_eq!(converted["max_output_tokens"], 64);
+                    assert!(converted.get("text").is_none());
                     assert_eq!(converted["reasoning"]["effort"], "medium");
-                    assert_eq!(converted["reasoning"]["summary"], "auto");
-                    if provider_api_format == "openai:responses" {
-                        assert_eq!(converted["store"], false);
-                        assert!(converted["include"]
-                            .as_array()
-                            .expect("include")
-                            .iter()
-                            .any(|value| value.as_str() == Some("reasoning.encrypted_content")));
-                    } else {
-                        assert!(converted.get("store").is_none());
-                        assert!(converted.get("include").is_none());
-                    }
+                    assert_eq!(converted["reasoning"]["summary"], "detailed");
+                    assert!(converted.get("store").is_none());
+                    assert!(converted.get("include").is_none());
                     let input_json = converted["input"].to_string();
                     assert!(!input_json.contains("<thinking>plan</thinking>"));
                     assert!(!input_json.contains("sig_123"));
@@ -2434,12 +2425,7 @@ mod tests {
         assert_eq!(converted["model"], "grok-4.6");
         assert!(converted.get("metadata").is_none());
         assert!(converted.get("context_management").is_none());
-        assert!(converted
-            .get("include")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|item| item == "reasoning.encrypted_content"));
+        assert!(converted.get("include").is_none());
         assert!(converted["tools"]
             .as_array()
             .into_iter()

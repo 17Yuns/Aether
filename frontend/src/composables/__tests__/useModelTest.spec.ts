@@ -55,6 +55,38 @@ afterEach(() => {
 })
 
 describe('model test failure details', () => {
+  it.each(['direct', 'global', 'pool'] as const)(
+    'forwards the client protocol independently of the upstream endpoint in %s mode',
+    async (mode) => {
+      const requestBody = {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 16,
+        stream: false,
+      }
+      mocks.testModel.mockResolvedValue({ success: true, model: 'test-model' })
+      mocks.testModelFailover.mockResolvedValue({ success: true, model: 'test-model', attempts: [] })
+      const modelTest = mountModelTest()
+      await modelTest.startTest({
+        ...params,
+        mode,
+        apiFormat: 'openai:chat',
+        clientApiFormat: 'claude:messages',
+        endpointId: 'chat-endpoint',
+        requestBody,
+      })
+
+      const testApi = mode === 'direct' ? mocks.testModel : mocks.testModelFailover
+      expect(testApi).toHaveBeenCalledWith(expect.objectContaining({
+        api_format: 'openai:chat',
+        client_api_format: 'claude:messages',
+        endpoint_id: 'chat-endpoint',
+        request_body: requestBody,
+      }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+      expect(modelTest.testResult.value?.success).toBe(true)
+    },
+  )
+
   it('keeps an HTTP error in the dialog and retains its request trace', async () => {
     mocks.testModelFailover.mockRejectedValue({
       response: { status: 503, data: { error: { message: 'Model test execution failed' } } },

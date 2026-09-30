@@ -1118,6 +1118,7 @@ fn standard_request_root_field_is_audited(source: FormatId, key: &str) -> bool {
                 | "client_metadata"
                 | "context_management"
                 | "conversation"
+                | "frequency_penalty"
                 | "include"
                 | "input"
                 | "instructions"
@@ -1128,6 +1129,7 @@ fn standard_request_root_field_is_audited(source: FormatId, key: &str) -> bool {
                 | "multi_agent"
                 | "parallel_tool_calls"
                 | "previous_response_id"
+                | "presence_penalty"
                 | "prompt"
                 | "prompt_cache_key"
                 | "prompt_cache_options"
@@ -1154,6 +1156,7 @@ fn standard_request_root_field_is_audited(source: FormatId, key: &str) -> bool {
                 | "context_management"
                 | "inference_geo"
                 | "max_tokens"
+                | "max_tokens_to_sample"
                 | "messages"
                 | "metadata"
                 | "model"
@@ -1251,16 +1254,6 @@ fn validate_cross_format_generation_target(
                     "n",
                     generation.n.is_some(),
                     "OpenAI Responses has no multi-candidate n request field",
-                ),
-                (
-                    "presence_penalty",
-                    generation.presence_penalty.is_some(),
-                    "OpenAI Responses has no presence_penalty request field",
-                ),
-                (
-                    "frequency_penalty",
-                    generation.frequency_penalty.is_some(),
-                    "OpenAI Responses has no frequency_penalty request field",
                 ),
                 (
                     "seed",
@@ -2583,15 +2576,7 @@ fn validate_openai_chat_to_responses(body: &Value) -> Result<(), FormatError> {
     let Some(object) = body.as_object() else {
         return Ok(());
     };
-    for field in [
-        "n",
-        "stop",
-        "presence_penalty",
-        "frequency_penalty",
-        "seed",
-        "logprobs",
-        "stream_options",
-    ] {
+    for field in ["n", "stop", "seed", "logprobs", "stream_options"] {
         if object.contains_key(field) {
             return Err(FormatError::LossyConversionBlocked {
                 source_format: FormatId::OpenAiChat.as_str().to_string(),

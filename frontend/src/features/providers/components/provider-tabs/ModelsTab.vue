@@ -273,6 +273,8 @@
     :requested-model-name="pendingRequestedModelName"
     :endpoints="activeEndpoints"
     :selected-endpoint="selectedTestEndpoint"
+    :client-api-formats="testClientApiFormats"
+    :selected-client-api-format="effectiveTestClientApiFormat"
     :testing="modelTest.testing.value"
     :trace="modelTest.testTrace.value"
     :request-id="modelTest.requestId.value"
@@ -293,6 +295,7 @@
     @back="handleTestDialogBack"
     @start="handleStartPendingTest"
     @select-endpoint="handleSelectTestEndpoint"
+    @select-client-api-format="handleSelectTestClientApiFormat"
     @select-model-mapping="handleSelectModelMapping"
     @update:selected-key-ids="handleSelectTestKeyIds"
     @update:request-headers-draft="testRequestHeadersDraft = $event"
@@ -320,7 +323,7 @@ import {
 import { getProviderKeys, type EndpointAPIKey } from '@/api/endpoints/keys'
 import { deleteModel, updateModel } from '@/api/endpoints/models'
 import { parseApiError } from '@/utils/errorParser'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { formatApiFormat, normalizeApiFormatAlias } from '@/api/endpoints/types/api-format'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import ModelTestDialog from './ModelTestDialog.vue'
 import {
@@ -367,6 +370,19 @@ const selectedIds = ref<Set<string>>(new Set())
 const deletingSelected = ref(false)
 const pendingTestModel = ref<Model | null>(null)
 const selectedTestEndpoint = ref<ProviderEndpoint | null>(null)
+const selectedTestClientApiFormat = ref<string | null>(null)
+const testClientApiFormats = computed(() => {
+  const formats = ['openai:chat', 'openai:responses', 'claude:messages']
+  const providerType = props.provider.provider_type?.trim().toLowerCase() ?? ''
+  if (['grok', 'kiro', 'antigravity', 'windsurf', 'codex'].includes(providerType)) return []
+  return formats.includes(normalizeApiFormatAlias(selectedTestEndpoint.value?.api_format))
+    ? formats
+    : []
+})
+const effectiveTestClientApiFormat = computed(() => (
+  selectedTestClientApiFormat.value
+    || normalizeApiFormatAlias(selectedTestEndpoint.value?.api_format)
+))
 const testRequestHeadersDraft = ref('')
 const testRequestHeadersResetValue = ref('')
 const testRequestBodyDraft = ref('')
@@ -675,6 +691,7 @@ function handleTestDialogClose() {
   modelTest.resetState()
   pendingTestModel.value = null
   selectedTestEndpoint.value = null
+  selectedTestClientApiFormat.value = null
   selectedTestMappedModelName.value = null
   selectedTestKeyIds.value = []
   testRequestHeadersDraft.value = ''
@@ -693,6 +710,7 @@ function handleSelectTestEndpoint(endpointId: string) {
   const endpoint = activeEndpoints.value.find(item => item.id === endpointId)
   if (!endpoint) return
   selectedTestEndpoint.value = endpoint
+  selectedTestClientApiFormat.value = null
   syncSelectedTestModelMapping()
   resetTestRequestBodyForSelectedEndpoint()
   pruneSelectedTestKeyIds()
@@ -704,6 +722,20 @@ function handleSelectModelMapping(modelName: string) {
     modelName,
   )
   syncTestRequestBodyModel()
+}
+
+function handleSelectTestClientApiFormat(apiFormat: string) {
+  if (!testClientApiFormats.value.includes(apiFormat)) return
+  if (effectiveTestClientApiFormat.value === apiFormat && selectedTestClientApiFormat.value) return
+  selectedTestClientApiFormat.value = apiFormat
+  const requestBody = buildDefaultModelTestRequestBody(
+    effectiveTestRequestModelName.value,
+    apiFormat,
+    pendingTestModel.value,
+    props.provider.provider_type,
+  )
+  testRequestBodyResetValue.value = requestBody
+  testRequestBodyDraft.value = requestBody
 }
 
 function handleSelectTestKeyIds(ids: string[]) {
@@ -736,12 +768,17 @@ async function handleStartPendingTest() {
   pruneSelectedTestKeyIds()
   const model = pendingTestModel.value
   const modelName = model.global_model_name || model.provider_model_name
-  const endpointPrefix = `[${formatApiFormat(endpoint.api_format)}] `
+  const sourceFormat = selectedTestClientApiFormat.value
+  const endpointLabel = sourceFormat && sourceFormat !== normalizeApiFormatAlias(endpoint.api_format)
+    ? `${formatApiFormat(sourceFormat)} → ${formatApiFormat(endpoint.api_format)}`
+    : formatApiFormat(endpoint.api_format)
+  const endpointPrefix = `[${endpointLabel}] `
   await modelTest.startTest({
     mode: isPoolManagedProvider.value ? 'pool' : 'global',
     modelName,
     displayLabel: `${endpointPrefix}${modelName}`,
     apiFormat: endpoint.api_format,
+    clientApiFormat: sourceFormat ?? undefined,
     endpointId: endpoint.id,
     endpointBaseUrl: endpoint.base_url,
     apiKeyIds: selectedTestKeyIds.value,
@@ -762,6 +799,7 @@ async function testModelConnection(model: Model) {
 
   pendingTestModel.value = model
   selectedTestEndpoint.value = selectPreferredModelTestEndpoint(model, activeEndpoints.value)
+  selectedTestClientApiFormat.value = null
   const requestedModelName = getModelTestRequestedModelName(model)
   selectedTestMappedModelName.value = null
   selectedTestKeyIds.value = []
@@ -771,6 +809,7 @@ async function testModelConnection(model: Model) {
     requestedModelName,
     selectedTestEndpoint.value?.api_format,
     model,
+    props.provider.provider_type,
   )
   testRequestBodyDraft.value = testRequestBodyResetValue.value
   modelTest.testResult.value = null
@@ -841,8 +880,9 @@ function syncTestRequestBodyModel() {
   const resetDraft = testRequestBodyResetValue.value
     || buildDefaultModelTestRequestBody(
       modelName,
-      selectedTestEndpoint.value?.api_format,
+      effectiveTestClientApiFormat.value,
       pendingTestModel.value,
+      props.provider.provider_type,
     )
   const next = syncModelTestRequestBodyDraft(
     testRequestBodyDraft.value,
@@ -860,8 +900,9 @@ function resetTestRequestBodyForSelectedEndpoint() {
 
   const nextResetValue = buildDefaultModelTestRequestBody(
     modelName,
-    selectedTestEndpoint.value?.api_format,
+    effectiveTestClientApiFormat.value,
     pendingTestModel.value,
+    props.provider.provider_type,
   )
   const next = syncModelTestRequestBodyDraft(
     testRequestBodyDraft.value,
@@ -874,7 +915,7 @@ function resetTestRequestBodyForSelectedEndpoint() {
 }
 
 watch(
-  [effectiveTestRequestModelName, () => selectedTestEndpoint.value?.api_format],
+  [effectiveTestRequestModelName, effectiveTestClientApiFormat],
   () => syncTestRequestBodyModel(),
 )
 

@@ -31,7 +31,11 @@ pub(super) fn provider_query_standard_test_client_api_format(
     provider_api_format: &str,
 ) -> &'static str {
     let normalized_api_format = crate::ai_serving::normalize_api_format_alias(provider_api_format);
-    if normalized_api_format == "openai:responses:compact" {
+    if normalized_api_format == "openai:responses" {
+        "openai:responses"
+    } else if normalized_api_format == "claude:messages" {
+        "claude:messages"
+    } else if normalized_api_format == "openai:responses:compact" {
         "openai:responses:compact"
     } else if normalized_api_format == "openai:search" {
         "openai:search"
@@ -42,6 +46,70 @@ pub(super) fn provider_query_standard_test_client_api_format(
     } else {
         "openai:chat"
     }
+}
+
+pub(super) fn provider_query_standard_test_request_client_api_format(
+    provider_api_format: &str,
+    request_body: Option<&Value>,
+) -> &'static str {
+    let native_format = provider_query_standard_test_client_api_format(provider_api_format);
+    let Some(body) = request_body.and_then(Value::as_object) else {
+        return native_format;
+    };
+    if native_format == "openai:responses"
+        && body.contains_key("messages")
+        && !body.contains_key("input")
+    {
+        return "openai:chat";
+    }
+    if native_format == "claude:messages" {
+        let has_chat_fields = [
+            "max_completion_tokens",
+            "reasoning_effort",
+            "response_format",
+            "parallel_tool_calls",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "n",
+            "stop",
+            "logprobs",
+            "stream_options",
+        ]
+        .iter()
+        .any(|field| body.contains_key(*field));
+        let has_chat_tools = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| tools.iter().any(|tool| tool.get("function").is_some()))
+            || body.get("tool_choice").is_some_and(Value::is_string);
+        let has_chat_messages =
+            body.get("messages")
+                .and_then(Value::as_array)
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        matches!(
+                            message.get("role").and_then(Value::as_str),
+                            Some("system" | "developer" | "tool")
+                        ) || message.get("tool_calls").is_some()
+                            || message
+                                .get("content")
+                                .and_then(Value::as_array)
+                                .is_some_and(|parts| {
+                                    parts.iter().any(|part| {
+                                        matches!(
+                                            part.get("type").and_then(Value::as_str),
+                                            Some("image_url" | "input_audio" | "file")
+                                        )
+                                    })
+                                })
+                    })
+                });
+        if has_chat_fields || has_chat_tools || has_chat_messages {
+            return "openai:chat";
+        }
+    }
+    native_format
 }
 
 pub(super) fn provider_query_standard_test_unsupported_reason(

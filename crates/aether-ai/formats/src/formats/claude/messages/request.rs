@@ -72,6 +72,7 @@ pub fn from_raw(body_json: &Value) -> Option<CanonicalRequest> {
             "system",
             "messages",
             "max_tokens",
+            "max_tokens_to_sample",
             "temperature",
             "top_p",
             "top_k",

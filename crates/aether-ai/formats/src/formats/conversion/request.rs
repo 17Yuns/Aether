@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_request_to_responses_uses_developer_system_and_sub2api_defaults() {
+    fn claude_request_to_responses_preserves_explicit_generation_settings() {
         let body = json!({
             "model": "claude-sonnet",
             "system": [{
@@ -793,29 +793,21 @@ mod tests {
         .expect("responses request");
 
         assert_eq!(converted["model"], "gpt-5.1");
-        assert!(converted.get("temperature").is_none());
-        assert!(converted.get("top_p").is_none());
-        assert!(converted.get("instructions").is_none());
-        assert_eq!(converted["text"]["verbosity"], "medium");
+        assert_eq!(converted["temperature"], 0.2);
+        assert_eq!(converted["top_p"], 0.9);
+        assert_eq!(converted["instructions"], "Be exact.");
+        assert!(converted.get("text").is_none());
         assert_eq!(converted["reasoning"]["effort"], "medium");
-        assert_eq!(converted["reasoning"]["summary"], "auto");
-        assert_eq!(converted["max_output_tokens"], 128);
-        assert_eq!(converted["store"], false);
-        assert_eq!(converted["parallel_tool_calls"], true);
-        assert!(converted["include"]
-            .as_array()
-            .expect("include")
-            .iter()
-            .any(|value| value.as_str() == Some("reasoning.encrypted_content")));
+        assert_eq!(converted["reasoning"]["summary"], "detailed");
+        assert_eq!(converted["max_output_tokens"], 10);
+        for field in ["store", "parallel_tool_calls", "include"] {
+            assert!(converted.get(field).is_none(), "unexpected default {field}");
+        }
 
         let input = converted["input"].as_array().expect("responses input");
-        assert_eq!(input[0]["role"], "developer");
+        assert_eq!(input[0]["role"], "user");
         assert_eq!(input[0]["content"][0]["type"], "input_text");
-        assert_eq!(input[0]["content"][0]["text"], "Be exact.");
-        assert_eq!(
-            input[0]["content"][0]["cache_control"],
-            json!({"type": "ephemeral"})
-        );
+        assert_eq!(input[0]["content"][0]["text"], "hello");
         let input_json = Value::Array(input.clone()).to_string();
         assert!(input_json.contains("visible answer"));
         assert!(!input_json.contains("private plan"));
@@ -858,25 +850,23 @@ mod tests {
         .expect("responses request");
 
         let input = converted["input"].as_array().expect("responses input");
-        assert_eq!(input.len(), 5);
-        assert_eq!(input[0]["role"], "developer");
-        assert_eq!(input[0]["content"][0]["text"], "Be exact.");
-        assert_eq!(input[1]["role"], "user");
-        assert_eq!(input[1]["content"][0]["text"], "hello");
-        assert_eq!(input[2]["role"], "developer");
+        assert_eq!(input.len(), 4);
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["text"], "hello");
+        assert_eq!(input[1]["role"], "developer");
         assert_eq!(
-            input[2]["content"][0]["text"],
+            input[1]["content"][0]["text"],
             "SessionStart hook additional context: follow the house style."
         );
-        assert!(!input[2]["content"][0]["text"]
+        assert!(!input[1]["content"][0]["text"]
             .as_str()
             .expect("developer guidance text")
             .contains("x-anthropic-billing-header:"));
-        assert_eq!(input[3]["role"], "assistant");
-        assert_eq!(input[3]["content"][0]["text"], "visible answer");
-        assert_eq!(input[4]["role"], "user");
-        assert_eq!(input[4]["content"][0]["text"], "continue");
-        assert!(converted.get("instructions").is_none());
+        assert_eq!(input[2]["role"], "assistant");
+        assert_eq!(input[2]["content"][0]["text"], "visible answer");
+        assert_eq!(input[3]["role"], "user");
+        assert_eq!(input[3]["content"][0]["text"], "continue");
+        assert_eq!(converted["instructions"], "Be exact.");
     }
 
     #[test]
@@ -929,7 +919,180 @@ mod tests {
         .expect("responses request");
 
         assert_eq!(converted["reasoning"]["effort"], "max");
-        assert_eq!(converted["reasoning"]["summary"], "auto");
+        assert_eq!(converted["reasoning"]["summary"], "detailed");
+    }
+
+    #[test]
+    fn chat_and_responses_preserve_penalties_and_token_limits() {
+        for (frequency, presence, max_tokens, expected_limit) in [
+            (0.0, 0.5, Some(0), 0),
+            (0.3, 0.0, Some(16), 16),
+            (0.0, 0.0, None, 100),
+        ] {
+            let body = json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 100,
+                "max_completion_tokens": max_tokens,
+                "frequency_penalty": frequency,
+                "presence_penalty": presence,
+                "temperature": 0.0,
+                "top_p": 0.0,
+            });
+            let pure = registry::convert_request_pure("openai:chat", "openai:responses", &body)
+                .expect("penalties are supported upstream compatibility extensions")
+                .value;
+            let runtime = registry::convert_request(
+                "openai:chat",
+                "openai:responses",
+                &body,
+                &FormatContext::default(),
+            )
+            .expect("runtime conversion");
+            assert_eq!(runtime, pure);
+            assert_eq!(runtime["max_output_tokens"], expected_limit);
+            for field in [
+                "frequency_penalty",
+                "presence_penalty",
+                "temperature",
+                "top_p",
+            ] {
+                assert_eq!(runtime[field], body[field], "preserve explicit {field}");
+            }
+            let round_trip =
+                registry::convert_request_pure("openai:responses", "openai:chat", &runtime)
+                    .expect("Responses compatibility fields convert back to Chat")
+                    .value;
+            for field in [
+                "frequency_penalty",
+                "presence_penalty",
+                "temperature",
+                "top_p",
+            ] {
+                assert_eq!(round_trip[field], body[field]);
+            }
+            assert_eq!(round_trip["max_completion_tokens"], expected_limit);
+        }
+    }
+
+    #[test]
+    fn claude_to_openai_preserves_reasoning_intent_without_implicit_defaults() {
+        let cases = [
+            (json!({}), None, None),
+            (
+                json!({"max_tokens": null, "max_tokens_to_sample": 16}),
+                None,
+                None,
+            ),
+            (
+                json!({"thinking": {"type": "disabled"}}),
+                Some("none"),
+                None,
+            ),
+            (
+                json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}),
+                Some("low"),
+                Some("detailed"),
+            ),
+            (
+                json!({"thinking": {"type": "enabled", "budget_tokens": 8192}}),
+                Some("medium"),
+                Some("detailed"),
+            ),
+            (
+                json!({"thinking": {"type": "enabled", "budget_tokens": 8193}}),
+                Some("high"),
+                Some("detailed"),
+            ),
+            (
+                json!({"thinking": {"type": "adaptive", "display": "omitted"}}),
+                Some("high"),
+                None,
+            ),
+            (
+                json!({"output_config": {"effort": "max"}}),
+                Some("max"),
+                Some("detailed"),
+            ),
+        ];
+        for (settings, effort, summary) in cases {
+            let mut body = json!({
+                "model": "test-model",
+                "system": [{"type": "text", "text": "Be "}, {"type": "text", "text": "exact."}],
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 16,
+                "metadata": {"user_id": "test-user"},
+                "service_tier": "auto",
+            });
+            body.as_object_mut()
+                .unwrap()
+                .extend(settings.as_object().unwrap().clone());
+            for target in ["openai:chat", "openai:responses"] {
+                let converted = registry::convert_request(
+                    "claude:messages",
+                    target,
+                    &body,
+                    &FormatContext::default(),
+                )
+                .expect("Claude request conversion");
+                if target == "openai:responses" {
+                    assert_eq!(converted["max_output_tokens"], 16);
+                    assert_eq!(converted["instructions"], "Be exact.");
+                    assert_eq!(converted["metadata"], body["metadata"]);
+                    assert_eq!(converted["service_tier"], "auto");
+                    assert_eq!(converted["reasoning"]["effort"].as_str(), effort);
+                    assert_eq!(converted["reasoning"]["summary"].as_str(), summary);
+                    for field in ["text", "include", "store", "parallel_tool_calls"] {
+                        assert!(converted.get(field).is_none(), "unexpected default {field}");
+                    }
+                } else {
+                    assert_eq!(converted["max_tokens"], 16);
+                    assert!(converted.get("max_completion_tokens").is_none());
+                    assert_eq!(converted["reasoning_effort"].as_str(), effort);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn claude_to_chat_uses_the_mapped_models_token_field() {
+        let body = json!({
+            "model": "claude-sonnet",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 16
+        });
+        for (model, field) in [
+            ("test-model", "max_tokens"),
+            ("gpt-4o", "max_tokens"),
+            ("o1-mini", "max_completion_tokens"),
+            ("o3", "max_completion_tokens"),
+            ("gpt-5.4", "max_completion_tokens"),
+            ("gpt-6-sol", "max_completion_tokens"),
+            ("gpt-6-astra", "max_completion_tokens"),
+            ("gpt-6-luna-2028-02-29", "max_completion_tokens"),
+            ("gpt-6-luna-2026-02-29", "max_tokens"),
+            ("gpt-6-sol-custom", "max_tokens"),
+            ("gpt-7", "max_tokens"),
+        ] {
+            let converted = registry::convert_request(
+                "claude:messages",
+                "openai:chat",
+                &body,
+                &FormatContext::default().with_mapped_model(model),
+            )
+            .expect("mapped Claude to Chat request");
+            assert_eq!(converted["model"], model);
+            assert_eq!(converted[field], 16, "token field for {model}");
+            let other = if field == "max_tokens" {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            assert!(
+                converted.get(other).is_none(),
+                "do not emit both token fields"
+            );
+        }
     }
 
     #[test]

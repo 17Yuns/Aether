@@ -162,6 +162,7 @@ export function buildDefaultModelTestRequestBody(
   modelName: string,
   apiFormat?: string | null,
   model?: ModelTestImageSource | null,
+  providerType?: string | null,
 ): string {
   const normalizedApiFormat = normalizeApiFormatAlias(apiFormat ?? '')
 
@@ -248,6 +249,14 @@ export function buildDefaultModelTestRequestBody(
     }, null, 2)
   }
 
+  if (normalizedApiFormat === 'openai:responses' && providerType?.trim().toLowerCase() !== 'codex') {
+    return JSON.stringify({
+      model: modelName,
+      input: [{ role: 'user', content: DEFAULT_MODEL_TEST_MESSAGE }],
+      stream: false,
+    }, null, 2)
+  }
+
   return JSON.stringify({
     model: modelName,
     messages: [
@@ -256,8 +265,8 @@ export function buildDefaultModelTestRequestBody(
         content: DEFAULT_MODEL_TEST_MESSAGE,
       },
     ],
-    max_tokens: 30,
-    stream: true,
+    max_tokens: normalizedApiFormat === 'claude:messages' ? 16 : 30,
+    stream: false,
   }, null, 2)
 }
 

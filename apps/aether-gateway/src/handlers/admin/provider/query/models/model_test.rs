@@ -85,12 +85,15 @@ mod capabilities;
 mod model_mapping;
 mod summary;
 
+#[cfg(test)]
+use self::adapter::provider_query_standard_test_client_api_format;
 use self::adapter::{
     provider_query_antigravity_test_unsupported_reason,
     provider_query_antigravity_unsupported_reason,
     provider_query_default_antigravity_endpoint_test_body,
     provider_query_grok_test_unsupported_reason, provider_query_model_test_endpoint_priority,
-    provider_query_normalize_api_format_alias, provider_query_standard_test_client_api_format,
+    provider_query_normalize_api_format_alias,
+    provider_query_standard_test_request_client_api_format,
     provider_query_standard_test_unsupported_reason,
     provider_query_test_adapter_for_provider_api_format,
     provider_query_transport_supports_model_test_execution,
@@ -634,7 +637,12 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
             "return_documents": true,
             "top_n": 4,
         }),
-        "openai:responses" | "openai:responses:compact" => json!({
+        "openai:responses" => json!({
+            "model": model,
+            "input": [{"role": "user", "content": message}],
+            "stream": false,
+        }),
+        "openai:responses:compact" => json!({
             "model": model,
             "input": message,
             "max_output_tokens": 30,
@@ -655,8 +663,8 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
                 "role": "user",
                 "content": message
             }],
-            "max_tokens": 30,
-            "stream": true,
+            "max_tokens": 16,
+            "stream": false,
         }),
         _ => json!({
             "model": model,
@@ -2977,8 +2985,42 @@ async fn provider_query_execute_standard_test_candidate(
     let provider_api_format = candidate.endpoint.api_format.as_str();
     let normalized_provider_api_format =
         crate::ai_serving::normalize_api_format_alias(provider_api_format);
-    let client_api_format =
-        provider_query_standard_test_client_api_format(normalized_provider_api_format.as_str());
+    let explicit_client_api_format = payload
+        .get("client_api_format")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_str()
+                .map(provider_query_normalize_api_format_alias)
+        });
+    let explicit_client_api_format = match explicit_client_api_format {
+        Some(Some(format))
+            if matches!(format.as_str(), "openai:chat" | "openai:responses" | "claude:messages")
+                && matches!(normalized_provider_api_format.as_str(), "openai:chat" | "openai:responses" | "claude:messages")
+                && !crate::provider_transport::is_windsurf_provider_transport(&transport) => Some(format),
+        Some(_) => return Ok(provider_query_skipped_execution_outcome(
+            payload.get("request_body").cloned().unwrap_or(Value::Null),
+            "client_api_format must select Chat, Responses, or Claude for a supported standard endpoint",
+        )),
+        None => None,
+    };
+    let client_api_format = if let Some(format) = explicit_client_api_format.as_deref() {
+        format
+    } else if normalized_provider_api_format == "openai:responses"
+        && transport
+            .provider
+            .provider_type
+            .trim()
+            .eq_ignore_ascii_case("codex")
+        && !payload.get("request_body").is_some_and(Value::is_object)
+    {
+        "openai:chat"
+    } else {
+        provider_query_standard_test_request_client_api_format(
+            normalized_provider_api_format.as_str(),
+            payload.get("request_body"),
+        )
+    };
     let original_request_body =
         provider_query_build_test_request_body_for_api_format_with_search_session(
             payload,
@@ -3018,6 +3060,15 @@ async fn provider_query_execute_standard_test_candidate(
     let mut request_body = original_request_body.clone();
     if let Some(object) = request_body.as_object_mut() {
         object.insert("stream".to_string(), Value::Bool(false));
+        if explicit_client_api_format.is_some()
+            && client_api_format == "claude:messages"
+            && !object.get("max_tokens").is_some_and(Value::is_u64)
+            && !object
+                .get("max_tokens_to_sample")
+                .is_some_and(Value::is_u64)
+        {
+            object.insert("max_tokens".to_string(), json!(8192));
+        }
     }
     let request_model =
         provider_query_request_body_model(&request_body, &candidate.effective_model);
@@ -3032,6 +3083,35 @@ async fn provider_query_execute_standard_test_candidate(
         transport.endpoint.config.as_ref(),
     );
     let mut provider_request_body = match normalized_provider_api_format.as_str() {
+        "openai:chat" | "openai:responses" | "claude:messages"
+            if explicit_client_api_format.is_some()
+                && client_api_format != normalized_provider_api_format =>
+        {
+            let Some(body) = crate::ai_serving::build_standard_request_body_with_model_directives_and_request_headers_and_reasoning_replay_policy(
+                &request_body,
+                client_api_format,
+                request_model,
+                transport.provider.provider_type.as_str(),
+                normalized_provider_api_format.as_str(),
+                route_path,
+                upstream_is_stream,
+                transport.endpoint.body_rules.as_ref(),
+                Some(candidate.key.id.as_str()),
+                Some(&incoming_request_headers),
+                false,
+                crate::ai_serving::openai_responses_reasoning_replay_policy(
+                    transport.provider.provider_type.as_str(),
+                    transport.endpoint.base_url.as_str(),
+                    request_model,
+                ),
+            ) else {
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body could not be converted from {client_api_format} to {provider_api_format}"),
+                ));
+            };
+            body
+        }
         "openai:chat" => {
             let Some(mut provider_request_body) =
                 crate::ai_serving::build_local_openai_chat_request_body(
@@ -3059,14 +3139,22 @@ async fn provider_query_execute_standard_test_candidate(
             provider_request_body
         }
         "claude:messages" | "gemini:generate_content" => {
-            let Some(mut provider_request_body) =
+            let Some(mut provider_request_body) = (if client_api_format == "claude:messages" {
+                let mut body = request_body.clone();
+                if !body.get("max_tokens").is_some_and(Value::is_u64) {
+                    body.as_object_mut()
+                        .expect("test request is an object")
+                        .insert("max_tokens".to_string(), json!(8192));
+                }
+                Some(body)
+            } else {
                 crate::ai_serving::build_cross_format_openai_chat_request_body(
                     &request_body,
                     request_model,
                     normalized_provider_api_format.as_str(),
                     upstream_is_stream,
                 )
-            else {
+            }) else {
                 return Ok(provider_query_skipped_execution_outcome(
                     request_body.clone(),
                     format!("Provider request body could not be built for {provider_api_format}"),

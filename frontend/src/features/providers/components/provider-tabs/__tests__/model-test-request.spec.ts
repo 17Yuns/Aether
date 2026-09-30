@@ -70,8 +70,37 @@ describe('buildDefaultModelTestRequestBody', () => {
     const body = JSON.parse(buildDefaultModelTestRequestBody('gpt-5.1', 'openai:chat'))
 
     expect(body.messages).toEqual([{ role: 'user', content: 'Hello! This is a test message.' }])
-    expect(body.stream).toBe(true)
+    expect(body.stream).toBe(false)
     expect(body.temperature).toBeUndefined()
+    expect(body.input).toBeUndefined()
+  })
+
+  it('uses a native minimal Responses request without an output token limit', () => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('test-model', 'openai:responses'))
+
+    expect(body).toEqual({
+      model: 'test-model',
+      input: [{ role: 'user', content: 'Hello! This is a test message.' }],
+      stream: false,
+    })
+  })
+
+  it('uses a nonstreaming Claude request with an explicit token limit', () => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('test-model', 'claude:messages'))
+
+    expect(body).toEqual({
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'Hello! This is a test message.' }],
+      max_tokens: 16,
+      stream: false,
+    })
+  })
+
+  it('uses a Chat draft for Codex endpoints that need structured Responses input', () => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('test-model', 'openai:responses', null, 'codex'))
+
+    expect(body.messages).toEqual([{ role: 'user', content: 'Hello! This is a test message.' }])
+    expect(body.stream).toBe(false)
     expect(body.input).toBeUndefined()
   })
 
@@ -257,7 +286,7 @@ describe('buildDefaultModelTestRequestBody', () => {
 
     expect(body.model).toBe('MiniMax-M2.7-highspeed')
     expect(body.messages).toEqual([{ role: 'user', content: 'Hello! This is a test message.' }])
-    expect(body.stream).toBe(true)
+    expect(body.stream).toBe(false)
   })
 
   it('updates the draft to the next endpoint default when the user has not edited it', () => {

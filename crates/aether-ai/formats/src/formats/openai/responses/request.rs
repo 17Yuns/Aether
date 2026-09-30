@@ -10,18 +10,18 @@ use crate::{
     protocol::canonical::{
         canonical_response_format_to_openai_responses, canonical_tool_is_openai_custom,
         canonical_tool_use_to_openai_responses_input_item, is_claude_messages_request,
-        is_claude_system_instruction, is_claude_thinking_block, is_claude_tool_result,
-        is_openai_responses_content_block, is_openai_responses_input_message,
-        is_openai_responses_raw_block, is_openai_responses_raw_content_block,
-        is_openai_thinking_block, media_data_or_url, namespace_extension_object,
-        openai_content_text, openai_extensions, openai_prompt_cache_breakpoint_from_extensions,
-        openai_response_format_to_canonical, openai_responses_extension,
-        openai_responses_generation_config, openai_responses_input_to_canonical_messages,
-        openai_responses_item_extension_object, openai_responses_tool_choice_to_canonical,
-        openai_responses_tools_to_canonical, openai_tool_choice_raw_to_responses,
-        strip_claude_billing_header, CanonicalContentBlock, CanonicalInstruction, CanonicalRequest,
-        CanonicalRole, CanonicalThinkingConfig, CanonicalToolChoice, CanonicalToolDefinition,
-        OPENAI_RESPONSES_EXTENSION_NAMESPACE, OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE,
+        is_claude_thinking_block, is_claude_tool_result, is_openai_responses_content_block,
+        is_openai_responses_input_message, is_openai_responses_raw_block,
+        is_openai_responses_raw_content_block, is_openai_thinking_block, media_data_or_url,
+        namespace_extension_object, openai_content_text, openai_extensions,
+        openai_prompt_cache_breakpoint_from_extensions, openai_response_format_to_canonical,
+        openai_responses_extension, openai_responses_generation_config,
+        openai_responses_input_to_canonical_messages, openai_responses_item_extension_object,
+        openai_responses_tool_choice_to_canonical, openai_responses_tools_to_canonical,
+        openai_tool_choice_raw_to_responses, strip_claude_billing_header, CanonicalContentBlock,
+        CanonicalInstruction, CanonicalRequest, CanonicalRole, CanonicalThinkingConfig,
+        CanonicalToolChoice, CanonicalToolDefinition, OPENAI_RESPONSES_EXTENSION_NAMESPACE,
+        OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE,
     },
 };
 
@@ -172,6 +172,8 @@ pub fn from_raw(body_json: &Value) -> Option<CanonicalRequest> {
             "max_output_tokens",
             "temperature",
             "top_p",
+            "frequency_penalty",
+            "presence_penalty",
             "metadata",
             "tools",
             "parallel_tool_calls",
@@ -221,22 +223,27 @@ pub fn to_raw(
         output.insert("instructions".to_string(), instructions);
     }
     let mut input = canonical_messages_to_responses_input(canonical)?;
-    if let Some(developer_message) =
-        claude_system_instructions_to_responses_developer_message(canonical)
-    {
-        input.insert(0, developer_message);
-    }
     ensure_json_object_response_input_mentions_json(canonical, instructions.as_ref(), &mut input);
     output.insert("input".to_string(), Value::Array(input));
 
     if upstream_is_stream && !compact {
         output.insert("stream".to_string(), Value::Bool(true));
     }
-    if let Some(max_tokens) = responses_max_output_tokens(canonical) {
+    if let Some(max_tokens) = canonical.generation.max_tokens {
         output.insert("max_output_tokens".to_string(), Value::from(max_tokens));
     }
     insert_number(&mut output, "temperature", canonical.generation.temperature);
     insert_number(&mut output, "top_p", canonical.generation.top_p);
+    insert_number(
+        &mut output,
+        "frequency_penalty",
+        canonical.generation.frequency_penalty,
+    );
+    insert_number(
+        &mut output,
+        "presence_penalty",
+        canonical.generation.presence_penalty,
+    );
     if let Some(top_logprobs) = canonical.generation.top_logprobs {
         output.insert("top_logprobs".to_string(), Value::from(top_logprobs));
     }
@@ -276,7 +283,13 @@ pub fn to_raw(
         OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE,
         &output,
     ));
-    apply_claude_responses_request_defaults(canonical, mapped_model, &mut output);
+    if let Some(service_tier) = canonical
+        .extensions
+        .get("claude")
+        .and_then(|value| value.get("service_tier"))
+    {
+        output.insert("service_tier".to_string(), service_tier.clone());
+    }
     if compact {
         apply_compact_request_projection(&mut output);
     }
@@ -334,20 +347,16 @@ fn canonical_instructions_to_responses(canonical: &CanonicalRequest) -> Option<V
     let text = canonical
         .instructions
         .iter()
-        .filter(|instruction| !is_claude_system_instruction(instruction))
         .map(|instruction| instruction.text.as_str())
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
-        .join("\n\n");
+        .join(if is_claude_messages_request(&canonical.extensions) {
+            ""
+        } else {
+            "\n\n"
+        });
     if !text.trim().is_empty() {
         return Some(Value::String(text));
-    }
-    if canonical
-        .instructions
-        .iter()
-        .any(is_claude_system_instruction)
-    {
-        return None;
     }
     canonical
         .system
@@ -355,41 +364,6 @@ fn canonical_instructions_to_responses(canonical: &CanonicalRequest) -> Option<V
         .filter(|value| !value.trim().is_empty())
         .cloned()
         .map(Value::String)
-}
-
-fn claude_system_instructions_to_responses_developer_message(
-    canonical: &CanonicalRequest,
-) -> Option<Value> {
-    let content = canonical
-        .instructions
-        .iter()
-        .filter(|instruction| is_claude_system_instruction(instruction))
-        .filter_map(claude_system_instruction_to_responses_part)
-        .collect::<Vec<_>>();
-    (!content.is_empty()).then(|| {
-        json!({
-            "type": "message",
-            "role": "developer",
-            "content": content,
-        })
-    })
-}
-
-fn claude_system_instruction_to_responses_part(
-    instruction: &CanonicalInstruction,
-) -> Option<Value> {
-    if instruction.text.trim().is_empty() {
-        return None;
-    }
-    let mut part = Map::new();
-    part.insert("type".to_string(), Value::String("input_text".to_string()));
-    part.insert("text".to_string(), Value::String(instruction.text.clone()));
-    part.extend(namespace_extension_object(
-        &instruction.extensions,
-        "claude",
-        &part,
-    ));
-    Some(Value::Object(part))
 }
 
 fn canonical_messages_to_responses_input(canonical: &CanonicalRequest) -> Option<Vec<Value>> {
@@ -591,49 +565,6 @@ fn responses_tool_name(name: &str) -> String {
         "unknown".to_string()
     } else {
         trimmed.to_string()
-    }
-}
-
-fn responses_max_output_tokens(canonical: &CanonicalRequest) -> Option<u64> {
-    canonical.generation.max_tokens.map(|max_tokens| {
-        if is_claude_messages_request(&canonical.extensions) && max_tokens < 128 {
-            128
-        } else {
-            max_tokens
-        }
-    })
-}
-
-fn apply_claude_responses_request_defaults(
-    canonical: &CanonicalRequest,
-    mapped_model: &str,
-    output: &mut Map<String, Value>,
-) {
-    if !is_claude_messages_request(&canonical.extensions) {
-        return;
-    }
-    if mapped_model
-        .trim()
-        .to_ascii_lowercase()
-        .starts_with("gpt-5")
-    {
-        output.remove("temperature");
-        output.remove("top_p");
-    }
-    output
-        .entry("store".to_string())
-        .or_insert_with(|| Value::Bool(false));
-    output
-        .entry("parallel_tool_calls".to_string())
-        .or_insert_with(|| Value::Bool(true));
-    let include = output
-        .entry("include".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if let Some(include) = include.as_array_mut() {
-        let encrypted_content = Value::String("reasoning.encrypted_content".to_string());
-        if !include.iter().any(|value| value == &encrypted_content) {
-            include.push(encrypted_content);
-        }
     }
 }
 
@@ -881,39 +812,23 @@ fn canonical_tools_to_responses(canonical: &CanonicalRequest) -> Vec<Value> {
 }
 
 fn canonical_reasoning_config_to_responses(canonical: &CanonicalRequest) -> Option<Value> {
-    let is_claude_request = is_claude_messages_request(&canonical.extensions);
-    if !is_claude_request {
-        return canonical
-            .thinking
-            .as_ref()
-            .and_then(reasoning_config_to_responses);
+    let thinking = canonical.thinking.as_ref()?;
+    let mut reasoning = reasoning_config_to_responses(thinking)?;
+    if is_claude_messages_request(&canonical.extensions)
+        && reasoning.get("effort").and_then(Value::as_str) != Some("none")
+        && thinking
+            .extensions
+            .get("claude")
+            .and_then(|value| value.get("display"))
+            .and_then(Value::as_str)
+            != Some("omitted")
+    {
+        reasoning
+            .as_object_mut()?
+            .entry("summary".to_string())
+            .or_insert_with(|| Value::String("detailed".to_string()));
     }
-
-    let mut object = canonical
-        .thinking
-        .as_ref()
-        .and_then(|thinking| openai_responses_extension(&thinking.extensions).cloned())
-        .and_then(|value| match value {
-            Value::Object(object) => Some(object),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let effort = canonical
-        .thinking
-        .as_ref()
-        .and_then(|thinking| thinking.extensions.get("claude"))
-        .and_then(|value| value.get("output_config"))
-        .and_then(|value| value.get("effort"))
-        .and_then(Value::as_str)
-        .and_then(openai_responses_reasoning_effort)
-        .unwrap_or("medium");
-    object
-        .entry("effort".to_string())
-        .or_insert_with(|| Value::String(effort.to_string()));
-    object
-        .entry("summary".to_string())
-        .or_insert_with(|| Value::String("auto".to_string()));
-    Some(Value::Object(object))
+    Some(reasoning)
 }
 
 fn reasoning_config_to_responses(thinking: &CanonicalThinkingConfig) -> Option<Value> {
@@ -972,10 +887,6 @@ fn canonical_text_config_to_responses(canonical: &CanonicalRequest) -> Option<Va
         .cloned()
     {
         text.insert("verbosity".to_string(), verbosity);
-    }
-    if is_claude_messages_request(&canonical.extensions) {
-        text.entry("verbosity".to_string())
-            .or_insert_with(|| Value::String("medium".to_string()));
     }
     (!text.is_empty()).then_some(Value::Object(text))
 }

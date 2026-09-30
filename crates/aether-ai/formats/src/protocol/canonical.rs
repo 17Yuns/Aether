@@ -1957,15 +1957,6 @@ pub(crate) fn is_claude_messages_request(extensions: &BTreeMap<String, Value>) -
         == Some(CLAUDE_MESSAGES_REQUEST_SOURCE_MARKER)
 }
 
-pub(crate) fn is_claude_system_instruction(instruction: &CanonicalInstruction) -> bool {
-    instruction
-        .extensions
-        .get(AETHER_EXTENSION_NAMESPACE)
-        .and_then(|value| value.get("source"))
-        .and_then(Value::as_str)
-        == Some(CLAUDE_SYSTEM_SOURCE_MARKER)
-}
-
 pub(crate) fn claude_messages_to_canonical(
     messages: Option<&Value>,
 ) -> Option<Vec<CanonicalMessage>> {
@@ -4639,7 +4630,10 @@ pub(crate) fn openai_content_text(content: Option<&Value>) -> String {
 
 pub(crate) fn claude_generation_config(request: &Map<String, Value>) -> CanonicalGenerationConfig {
     CanonicalGenerationConfig {
-        max_tokens: request.get("max_tokens").and_then(Value::as_u64),
+        max_tokens: request
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .or_else(|| request.get("max_tokens_to_sample").and_then(Value::as_u64)),
         temperature: request.get("temperature").and_then(Value::as_f64),
         top_p: request.get("top_p").and_then(Value::as_f64),
         top_k: request.get("top_k").and_then(Value::as_u64),
@@ -4817,27 +4811,37 @@ pub(crate) fn claude_thinking_to_canonical(
             );
         }
     }
-    if let Some(reasoning_effort) = output_config
-        .and_then(|value| value.get("effort"))
-        .and_then(Value::as_str)
-        .and_then(claude_output_effort_to_openai_reasoning_effort)
-        .or_else(|| {
-            thinking
-                .and_then(|value| value.get("budget_tokens"))
-                .and_then(Value::as_u64)
-                .map(map_thinking_budget_to_openai_reasoning_effort)
-        })
-    {
+    let thinking_type = thinking
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str);
+    let reasoning_effort = if thinking_type == Some("disabled") {
+        Some("none")
+    } else {
+        output_config
+            .and_then(|value| value.get("effort"))
+            .and_then(Value::as_str)
+            .and_then(claude_output_effort_to_openai_reasoning_effort)
+            .or_else(|| {
+                thinking
+                    .and_then(|value| value.get("budget_tokens"))
+                    .and_then(Value::as_u64)
+                    .map(|budget| match budget {
+                        0 => "none",
+                        1..=1024 => "low",
+                        1025..=8192 => "medium",
+                        _ => "high",
+                    })
+            })
+            .or_else(|| thinking.map(|_| "high"))
+    };
+    if let Some(reasoning_effort) = reasoning_effort {
         extensions.insert(
             "openai".to_string(),
             json!({ "reasoning_effort": reasoning_effort }),
         );
     }
     Some(CanonicalThinkingConfig {
-        enabled: thinking
-            .and_then(|value| value.get("type"))
-            .and_then(Value::as_str)
-            .is_none_or(|value| value == "enabled"),
+        enabled: thinking_type != Some("disabled"),
         budget_tokens: thinking
             .and_then(|value| value.get("budget_tokens"))
             .and_then(Value::as_u64),
@@ -5268,8 +5272,8 @@ pub(crate) fn openai_generation_config(request: &Map<String, Value>) -> Canonica
     CanonicalGenerationConfig {
         max_tokens: request
             .get("max_completion_tokens")
-            .or_else(|| request.get("max_tokens"))
-            .and_then(Value::as_u64),
+            .and_then(Value::as_u64)
+            .or_else(|| request.get("max_tokens").and_then(Value::as_u64)),
         temperature: request.get("temperature").and_then(Value::as_f64),
         top_p: request.get("top_p").and_then(Value::as_f64),
         top_k: request.get("top_k").and_then(Value::as_u64),
@@ -7327,7 +7331,7 @@ pub(crate) fn strip_claude_billing_header(text: &str) -> String {
     let trimmed = text.trim();
     let prefix = "x-anthropic-billing-header:";
     if !trimmed.to_ascii_lowercase().starts_with(prefix) {
-        return trimmed.to_string();
+        return text.to_string();
     }
     let remainder = trimmed
         .split_once('\n')

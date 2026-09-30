@@ -17,6 +17,7 @@ export interface StartTestParams {
   modelName: string
   displayLabel: string
   apiFormat?: string
+  clientApiFormat?: string
   endpointId?: string
   endpointBaseUrl?: string
   message?: string
@@ -159,6 +160,7 @@ export function useModelTest(options: UseModelTestOptions) {
       model_name: params.modelName,
       mode: params.mode,
       api_format: params.apiFormat,
+      ...(params.clientApiFormat ? { client_api_format: params.clientApiFormat } : {}),
       endpoint_id: params.endpointId,
       ...(apiKeyIds ? { api_key_ids: apiKeyIds } : {}),
       ...(message ? { message } : {}),
@@ -273,6 +275,7 @@ export function useModelTest(options: UseModelTestOptions) {
           failover_models: [params.modelName],
           ...(apiKeyIds ? { api_key_ids: apiKeyIds } : {}),
           api_format: params.apiFormat,
+          ...(params.clientApiFormat ? { client_api_format: params.clientApiFormat } : {}),
           endpoint_id: params.endpointId,
           ...(message ? { message } : {}),
           ...(typeof params.applyModelMapping === 'boolean' ? { apply_model_mapping: params.applyModelMapping } : {}),

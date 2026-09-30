@@ -4145,6 +4145,198 @@ async fn gateway_handles_non_kiro_multi_model_failover_locally_impl() {
 }
 
 #[test]
+fn gateway_tests_all_client_protocols_on_standard_upstream_endpoints() {
+    run_provider_query_test(
+        "gateway_tests_all_client_protocols_on_standard_upstream_endpoints",
+        gateway_tests_all_client_protocols_on_standard_upstream_endpoints_impl,
+    );
+}
+
+async fn gateway_tests_all_client_protocols_on_standard_upstream_endpoints_impl() {
+    let calls = Arc::new(Mutex::new(0_usize));
+    let runtime_calls = calls.clone();
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| {
+            let calls = runtime_calls.clone();
+            async move {
+                *calls.lock().expect("runtime calls") += 1;
+                assert_eq!(plan.provider_id, "provider-custom");
+                assert!(!plan.stream);
+                let body = plan.body.json_body.as_ref().expect("upstream request body");
+                assert_eq!(body["model"], "test-model");
+                assert_eq!(body["stream"], false);
+                assert!(body.to_string().contains("Hello"));
+                assert!(body.to_string().contains("Be brief."));
+                let response_body = match plan.provider_api_format.as_str() {
+                    "openai:chat" => {
+                        assert_eq!(plan.url, "https://upstream.example/v1/chat/completions");
+                        assert_eq!(body["messages"][0]["role"], "system");
+                        assert!(body.get("input").is_none());
+                        let limit_field = if plan.client_api_format == "openai:responses" {
+                            "max_completion_tokens"
+                        } else {
+                            "max_tokens"
+                        };
+                        assert_eq!(body[limit_field], 16);
+                        json!({
+                            "id": "chatcmpl-protocol-test",
+                            "object": "chat.completion",
+                            "choices": [{"message": {"role": "assistant", "content": "Hello"}}]
+                        })
+                    }
+                    "openai:responses" => {
+                        assert_eq!(plan.url, "https://upstream.example/v1/responses");
+                        assert!(body.get("messages").is_none());
+                        assert_eq!(body["instructions"], "Be brief.");
+                        assert_eq!(body["max_output_tokens"], 16);
+                        json!({
+                            "id": "resp-protocol-test", "object": "response", "status": "completed",
+                            "output": [{"type": "message", "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Hello"}]}]
+                        })
+                    }
+                    "claude:messages" => {
+                        assert_eq!(plan.url, "https://upstream.example/v1/messages");
+                        assert!(body.get("input").is_none());
+                        assert!(body.get("system").is_some());
+                        assert_eq!(body["messages"][0]["role"], "user");
+                        assert_eq!(body["max_tokens"], 16);
+                        json!({
+                            "id": "msg-protocol-test", "type": "message", "role": "assistant",
+                            "model": "test-model", "stop_reason": "end_turn",
+                            "content": [{"type": "text", "text": "Hello"}]
+                        })
+                    }
+                    format => panic!("unexpected upstream format: {format}"),
+                };
+                if plan.provider_api_format == "claude:messages" {
+                    assert_eq!(
+                        plan.headers.get("x-api-key").map(String::as_str),
+                        Some("sk-protocol-test")
+                    );
+                    assert!(plan.headers.get("authorization").is_none());
+                } else {
+                    assert_eq!(
+                        plan.headers.get("authorization").map(String::as_str),
+                        Some("Bearer sk-protocol-test")
+                    );
+                    assert!(plan.headers.get("x-api-key").is_none());
+                }
+                Json(json!({
+                    "request_id": plan.request_id, "candidate_id": plan.candidate_id,
+                    "status_code": 200, "headers": {"content-type": "application/json"},
+                    "body": {"json_body": response_body}, "telemetry": {"elapsed_ms": 1}
+                }))
+            }
+        }),
+    );
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let formats = ["openai:chat", "openai:responses", "claude:messages"];
+    let mut provider = sample_provider("provider-custom", "Custom", 10);
+    provider.provider_type = "custom".to_string();
+    let repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        formats
+            .iter()
+            .enumerate()
+            .map(|(index, format)| {
+                sample_endpoint(
+                    &format!("endpoint-{index}"),
+                    "provider-custom",
+                    format,
+                    "https://upstream.example/v1",
+                )
+            })
+            .collect(),
+        formats
+            .iter()
+            .enumerate()
+            .map(|(index, format)| {
+                sample_bound_key(
+                    &format!("key-{index}"),
+                    "provider-custom",
+                    format,
+                    "sk-protocol-test",
+                )
+            })
+            .collect(),
+    ));
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+    for (target_index, target) in formats.iter().enumerate() {
+        for source in formats {
+            let body = match source {
+                "openai:chat" => json!({
+                    "messages": [{"role": "system", "content": "Be brief."},
+                        {"role": "user", "content": "Hello"}], "max_tokens": 16,
+                }),
+                "openai:responses" => json!({
+                    "instructions": "Be brief.", "input": [{"role": "user", "content": "Hello"}],
+                    "max_output_tokens": 16,
+                }),
+                _ => json!({
+                    "system": "Be brief.", "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 16,
+                }),
+            };
+            let route = if source == "openai:chat" {
+                "test-model"
+            } else {
+                "test-model-failover"
+            };
+            let response = client
+                .post(format!("{gateway_url}/api/admin/provider-query/{route}"))
+                .header(GATEWAY_HEADER, "rust-phase3b")
+                .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+                .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+                .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+                .json(&json!({
+                    "provider_id": "provider-custom", "model_name": "test-model",
+                    "failover_models": ["test-model"], "api_format": target,
+                    "endpoint_id": format!("endpoint-{target_index}"),
+                    "client_api_format": source, "request_body": body,
+                }))
+                .send()
+                .await
+                .expect("test request");
+            assert_eq!(response.status(), StatusCode::OK, "{source} -> {target}");
+            let payload: serde_json::Value = response.json().await.expect("test response");
+            assert_eq!(payload["success"], true, "{source} -> {target}: {payload}");
+            assert_eq!(payload["attempts"][0]["endpoint_api_format"], *target);
+        }
+    }
+    let response = client
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-custom", "model_name": "test-model",
+            "api_format": "openai:chat", "client_api_format": "invalid",
+        }))
+        .send()
+        .await
+        .expect("invalid protocol request");
+    let payload: serde_json::Value = response.json().await.expect("invalid protocol response");
+    assert_eq!(payload["success"], false);
+    assert!(payload
+        .to_string()
+        .contains("client_api_format must select"));
+    assert_eq!(*calls.lock().expect("runtime calls"), 9);
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[test]
 fn gateway_handles_openai_responses_test_model_locally() {
     run_provider_query_test(
         "gateway_handles_openai_responses_test_model_locally",
@@ -5428,6 +5620,26 @@ async fn gateway_handles_openai_responses_test_model_failover_locally_impl() {
                 assert_eq!(plan.provider_api_format, "openai:responses");
                 assert_eq!(plan.model_name.as_deref(), Some("gpt-5.4-mini"));
                 assert!(!plan.stream);
+                let body = plan
+                    .body
+                    .json_body
+                    .as_ref()
+                    .expect("Responses request body");
+                assert!(body.get("messages").is_none());
+                assert_eq!(body["stream"], false);
+                if body.get("max_output_tokens").is_some() {
+                    assert_eq!(body["max_output_tokens"], 16);
+                    assert_eq!(body["frequency_penalty"], 0.0);
+                    assert_eq!(body["input"][0]["content"][0]["text"], "legacy Chat draft");
+                } else {
+                    assert_eq!(
+                        body["input"],
+                        json!([{
+                            "role": "user",
+                            "content": "Hello! This is a test message."
+                        }])
+                    );
+                }
                 let failure_mode = *failure_mode.lock().expect("failure mode");
                 if failure_mode == 1 {
                     return (
@@ -5536,6 +5748,40 @@ async fn gateway_handles_openai_responses_test_model_failover_locally_impl() {
         json!("OpenAI Responses failover path succeeded")
     );
 
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-query/test-model-failover"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-openai",
+            "failover_models": ["gpt-5.4-mini"],
+            "api_format": "openai:responses",
+            "request_body": {
+                "messages": [{"role": "user", "content": "legacy Chat draft"}],
+                "max_tokens": 16,
+                "frequency_penalty": 0.0,
+                "stream": true
+            }
+        }))
+        .send()
+        .await
+        .expect("legacy draft should convert");
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("legacy result");
+    assert_eq!(payload["success"], true);
+    assert_eq!(
+        payload["attempts"][0]["request_body"]["max_output_tokens"],
+        16
+    );
+    assert_eq!(
+        payload["attempts"][0]["request_body"]["frequency_penalty"],
+        0.0
+    );
+
     for mode in [1, 2] {
         *failure_mode.lock().expect("failure mode") = mode;
         let response = reqwest::Client::new()
@@ -5606,6 +5852,21 @@ async fn gateway_handles_claude_cli_test_model_locally_impl() {
             assert_eq!(plan.provider_api_format, "claude:messages");
             assert_eq!(plan.url, "https://api.anthropic.example/v1/messages");
             assert_eq!(plan.model_name.as_deref(), Some("claude-sonnet-4-5"));
+            let body = plan.body.json_body.as_ref().expect("Claude request body");
+            let expected_limit = if body["messages"][0]["content"] == "native Claude without limit"
+            {
+                8192
+            } else {
+                16
+            };
+            assert_eq!(body["max_tokens"], expected_limit);
+            assert_eq!(body["stream"], false);
+            if body.get("system").is_some() {
+                assert_eq!(body["system"], "Be exact.");
+                assert_eq!(body["metadata"]["user_id"], "test-user");
+                assert_eq!(body["tools"][0]["name"], "lookup");
+                assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+            }
             Json(json!({
                 "request_id": plan.request_id,
                 "candidate_id": plan.candidate_id,
@@ -5681,6 +5942,48 @@ async fn gateway_handles_claude_cli_test_model_locally_impl() {
         payload["data"]["response"]["choices"][0]["message"]["content"],
         json!("Hello from Claude CLI")
     );
+
+    let native_body = json!({
+                "system": "Be exact.",
+                "messages": [{"role": "user", "content": "native Claude draft"}],
+                "tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}],
+                "metadata": {"user_id": "test-user"},
+                "max_tokens": 16,
+                "stream": false
+    });
+    let mut missing_limit_body = native_body.clone();
+    missing_limit_body
+        .as_object_mut()
+        .unwrap()
+        .remove("max_tokens");
+    missing_limit_body["messages"][0]["content"] = json!("native Claude without limit");
+    let chat_body = json!({
+        "messages": [{"role": "system", "content": "Be exact."}, {"role": "user", "content": "legacy Chat draft"}],
+        "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}],
+        "metadata": {"user_id": "test-user"},
+        "max_completion_tokens": 16,
+        "stream": false
+    });
+    for request_body in [native_body, chat_body, missing_limit_body] {
+        let response = reqwest::Client::new()
+            .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+            .header(GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .json(&json!({
+                "provider_id": "provider-claude",
+                "model": "claude-sonnet-4-5",
+                "api_format": "claude:messages",
+                "request_body": request_body
+            }))
+            .send()
+            .await
+            .expect("native and Chat drafts should be supported");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().await.expect("Claude result");
+        assert_eq!(payload["success"], true);
+    }
 
     gateway_handle.abort();
     execution_runtime_handle.abort();

@@ -497,12 +497,64 @@ fn provider_query_responses_test_request_body_defaults_to_responses_input() {
         &payload,
         "gpt-5.4-mini",
         "/api/admin/provider-query/test-model",
-        "openai:responses",
+        provider_query_standard_test_client_api_format("openai:responses"),
     );
 
     assert_eq!(body["model"], json!("gpt-5.4-mini"));
-    assert_eq!(body["input"], json!("hello from responses"));
+    assert_eq!(
+        body["input"],
+        json!([{"role": "user", "content": "hello from responses"}])
+    );
     assert!(body.get("messages").is_none());
+    assert!(body.get("max_output_tokens").is_none());
+    assert_eq!(body["stream"], false);
+}
+
+#[test]
+fn provider_query_standard_test_recognizes_native_requests_and_legacy_chat_drafts() {
+    let cases = [
+        (
+            "openai:responses",
+            json!({"input": "hello"}),
+            "openai:responses",
+        ),
+        (
+            "openai:responses",
+            json!({"messages": [{"role": "user", "content": "hello"}]}),
+            "openai:chat",
+        ),
+        (
+            "claude:messages",
+            json!({"system": "Be exact.", "messages": [{"role": "user", "content": "hello"}], "tools": [{"name": "lookup", "input_schema": {"type": "object"}}]}),
+            "claude:messages",
+        ),
+        (
+            "claude:messages",
+            json!({"messages": [{"role": "system", "content": "Be exact."}, {"role": "user", "content": "hello"}]}),
+            "openai:chat",
+        ),
+        (
+            "claude:messages",
+            json!({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}]}),
+            "openai:chat",
+        ),
+        (
+            "claude:messages",
+            json!({"tools": [{"type": "function", "function": {"name": "lookup"}}]}),
+            "openai:chat",
+        ),
+        (
+            "claude:messages",
+            json!({"tool_choice": "auto"}),
+            "openai:chat",
+        ),
+    ];
+    for (format, body, expected) in cases {
+        assert_eq!(
+            provider_query_standard_test_request_client_api_format(format, Some(&body)),
+            expected
+        );
+    }
 }
 
 #[test]
