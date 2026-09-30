@@ -4,6 +4,12 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version_tag:
+        description: '发布版本号，如 v1.2.3；留空发布当前提交的 snapshot 预发布版'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   actions: read
@@ -12,11 +18,6 @@ permissions:
 concurrency:
   group: release-aether-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  REGISTRY: ghcr.io
-  GHCR_IMAGE: fawney19/aether
-  DOCKERHUB_IMAGE: fawney19/aether
 
 jobs:
   preflight:
@@ -31,38 +32,39 @@ jobs:
       - name: Classify release tag
         id: classify
         shell: bash
+        env:
+          INPUT_VERSION_TAG: ${{ inputs.version_tag }}
         run: |
           set -euo pipefail
 
-          echo "publish=false" >> "${GITHUB_OUTPUT}"
-          echo "version_tag=" >> "${GITHUB_OUTPUT}"
-          echo "prerelease=false" >> "${GITHUB_OUTPUT}"
-          echo "make_latest=false" >> "${GITHUB_OUTPUT}"
+          tag="${INPUT_VERSION_TAG:-}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" || ( -z "${tag}" && "${GITHUB_REF_TYPE}" == "tag" ) ]]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
 
-          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
-            echo "Manual release build; publish jobs will be skipped."
+          if [[ -z "${tag}" ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+            echo "version_tag=snapshot-${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+            echo "make_latest=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          tag="${GITHUB_REF_NAME}"
           if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)\.[0-9]+)?$ ]]; then
             echo "Unsupported release tag: ${tag}" >&2
             echo "Expected vX.Y.Z, vX.Y.Z-beta.N, or vX.Y.Z-rc.N." >&2
             exit 1
           fi
 
+          echo "publish=true" >> "${GITHUB_OUTPUT}"
           echo "version_tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+          echo "make_latest=false" >> "${GITHUB_OUTPUT}"
 
           if [[ "${tag}" == *-* ]]; then
             echo "prerelease=true" >> "${GITHUB_OUTPUT}"
           else
             echo "make_latest=true" >> "${GITHUB_OUTPUT}"
-          fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            echo "publish=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "Manual release build for ${tag}; publish jobs will be skipped."
           fi
 
   frontend:
@@ -180,12 +182,6 @@ jobs:
             arch: amd64
             os: ubuntu-latest
             use_cross: true
-          - name: linux-arm64
-            target: aarch64-unknown-linux-musl
-            platform: linux
-            arch: arm64
-            os: ubuntu-latest
-            use_cross: true
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -225,96 +221,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  docker:
-    name: Docker multi-arch
-    needs: [preflight, frontend, build]
-    if: needs.preflight.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      attestations: write
-      contents: read
-      id-token: write
-      packages: write
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          path: artifacts
-
-      - name: Prepare dist layout
-        run: |
-          mkdir -p dist
-          cp artifacts/aether-gateway-linux-amd64/aether-gateway dist/aether-gateway-amd64
-          cp artifacts/aether-gateway-linux-arm64/aether-gateway dist/aether-gateway-arm64
-          chmod +x dist/aether-gateway-amd64 dist/aether-gateway-arm64
-          cp -r artifacts/frontend-dist dist/frontend
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: |
-            ${{ env.REGISTRY }}/${{ env.GHCR_IMAGE }}
-            docker.io/${{ env.DOCKERHUB_IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.preflight.outputs.make_latest == 'true' }}
-            type=raw,value=latest,enable=${{ needs.preflight.outputs.make_latest == 'true' }}
-            type=raw,value=beta,enable=${{ contains(github.ref_name, '-beta.') }}
-            type=raw,value=rc,enable=${{ contains(github.ref_name, '-rc.') }}
-            type=sha,prefix=
-          flavor: |
-            latest=false
-
-      - name: Build and push
-        id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: ./Dockerfile.app
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-
-      - name: Attest GHCR image provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.GHCR_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
-
-      - name: Attest Docker Hub image provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: docker.io/${{ env.DOCKERHUB_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
-
   package:
     name: Release tarballs
     needs: [preflight, frontend, build]
@@ -333,18 +239,15 @@ jobs:
           path: artifacts
 
       - name: Build release packages
+        env:
+          VERSION: ${{ needs.preflight.outputs.version_tag }}
+          SOURCE_REF: ${{ github.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-            SOURCE_REF="${GITHUB_REF_NAME}"
-          else
-            VERSION="snapshot-${GITHUB_SHA::7}"
-            SOURCE_REF="${GITHUB_SHA}"
-          fi
 
           mkdir -p package release-assets
-          for arch in amd64 arm64; do
+          for arch in amd64; do
             bundle="aether-${VERSION}-linux-${arch}"
             root="package/${bundle}"
             mkdir -p \
@@ -354,6 +257,7 @@ jobs:
             install -m 0755 "artifacts/aether-gateway-linux-${arch}/aether-gateway" "${root}/bin/aether-gateway"
             cp -R artifacts/frontend-dist/. "${root}/frontend/"
             sed \
+              -e "s|^REPO=\"\${AETHER_REPO:-fawney19/Aether}\"|REPO=\"\${AETHER_REPO:-${RELEASE_REPOSITORY}}\"|" \
               -e "s/^SOURCE_REF=\"\${AETHER_SOURCE_REF:-main}\"/SOURCE_REF=\"\${AETHER_SOURCE_REF:-${SOURCE_REF}}\"/" \
               -e "s/^VERSION=\"\${AETHER_VERSION:-}\"/VERSION=\"\${AETHER_VERSION:-${VERSION}}\"/" \
               install.sh > "${root}/install.sh"
@@ -370,6 +274,7 @@ jobs:
           done
 
           sed \
+            -e "s|^REPO=\"\${AETHER_REPO:-fawney19/Aether}\"|REPO=\"\${AETHER_REPO:-${RELEASE_REPOSITORY}}\"|" \
             -e "s/^SOURCE_REF=\"\${AETHER_SOURCE_REF:-main}\"/SOURCE_REF=\"\${AETHER_SOURCE_REF:-${SOURCE_REF}}\"/" \
             -e "s/^VERSION=\"\${AETHER_VERSION:-}\"/VERSION=\"\${AETHER_VERSION:-${VERSION}}\"/" \
             install.sh > release-assets/install.sh
@@ -402,7 +307,7 @@ jobs:
 
   github-release:
     name: GitHub Release assets
-    needs: [preflight, docker, package, vscodex]
+    needs: [preflight, package, vscodex]
     if: needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -424,7 +329,7 @@ jobs:
       - name: Delete stale draft releases for tag
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.version_tag }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
@@ -445,6 +350,8 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          tag_name: ${{ needs.preflight.outputs.version_tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           prerelease: ${{ needs.preflight.outputs.prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}

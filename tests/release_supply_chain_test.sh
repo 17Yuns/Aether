@@ -42,8 +42,6 @@ assert_line "${RELEASE_WORKFLOW}" "      attestations: write"
 assert_line "${RELEASE_WORKFLOW}" "      id-token: write"
 assert_line "${RELEASE_WORKFLOW}" \
     "        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2"
-assert_line "${RELEASE_WORKFLOW}" '          subject-digest: ${{ steps.push.outputs.digest }}'
-assert_line "${RELEASE_WORKFLOW}" "          push-to-registry: true"
 assert_line "${RELEASE_WORKFLOW}" "          subject-path: |"
 assert_line "${RELEASE_WORKFLOW}" "            release-assets/install.sh"
 assert_line "${RELEASE_WORKFLOW}" "            release-assets/SHA256SUMS"
@@ -51,13 +49,22 @@ assert_line "${RELEASE_WORKFLOW}" "            release-assets/AETHER_RELEASE_PRO
 
 for workflow in "${RELEASE_WORKFLOW}" "${NIGHTLY_WORKFLOW}"; do
     assert_line "${workflow}" "          - name: linux-amd64"
-    assert_line "${workflow}" "          - name: linux-arm64"
-    assert_line "${workflow}" "          for arch in amd64 arm64; do"
     assert_line "${workflow}" '            bundle="aether-${VERSION}-linux-${arch}"'
     if grep -Eq 'macos|apple-darwin|for platform in' "${workflow}"; then
         fail_test "gateway workflow still references a removed build platform: ${workflow}"
     fi
 done
+
+assert_line "${RELEASE_WORKFLOW}" "          for arch in amd64; do"
+assert_line "${RELEASE_WORKFLOW}" "    needs: [preflight, package, vscodex]"
+assert_line "${RELEASE_WORKFLOW}" '          tag_name: ${{ needs.preflight.outputs.version_tag }}'
+assert_line "${RELEASE_WORKFLOW}" '          target_commitish: ${{ github.sha }}'
+if grep -Eq '^  docker:|aarch64|arm64|uses: docker/' "${RELEASE_WORKFLOW}"; then
+    fail_test "release workflow still builds Docker images or ARM binaries"
+fi
+
+assert_line "${NIGHTLY_WORKFLOW}" "          - name: linux-arm64"
+assert_line "${NIGHTLY_WORKFLOW}" "          for arch in amd64 arm64; do"
 
 assert_line "${NIGHTLY_WORKFLOW}" \
     '          test "$(find release-assets -maxdepth 1 -name '\''*.tar.gz'\'' | wc -l)" -eq 2'
@@ -85,4 +92,6 @@ if grep -ERq '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+[^[:space:]#]+@[^0-9
     fail_test "workflow contains a mutable third-party action reference"
 fi
 
-echo "PASS: release supply-chain pins, provenance and Linux-only gateway platforms"
+python3 "${REPO_ROOT}/tests/release_preflight_test.py"
+
+echo "PASS: release supply-chain pins, provenance and gateway release platforms"

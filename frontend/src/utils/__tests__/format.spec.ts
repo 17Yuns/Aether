@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatByteSize, formatCompactNumber, formatTokens, formatUsageCount } from '../format'
+import { formatByteSize, formatCompactNumber, formatModelPrice, formatTokens, formatUsageCount } from '../format'
 
 describe('format utils', () => {
+  it.each([
+    [0.2, '$0.20'],
+    [0.8, '$0.80'],
+    [0.004, '$0.004'],
+    [0.0008, '$0.0008'],
+    [0.00000001, '$0.00000001'],
+    [1.234567, '$1.234567'],
+    [0, '$0.00'],
+  ])('preserves configured model price %s as %s', (price, expected) => {
+    expect(formatModelPrice(price)).toBe(expected)
+  })
+
+  it('keeps very small non-zero model prices distinct from free pricing', () => {
+    expect(formatModelPrice(Number.MIN_VALUE)).toBe('$5e-324')
+    expect(formatModelPrice(Number.NaN)).toBe('-')
+    expect(formatModelPrice(Number.POSITIVE_INFINITY)).toBe('-')
+  })
+
   it('formats compact numbers beyond millions', () => {
     expect(formatCompactNumber(999)).toBe('999')
     expect(formatCompactNumber(1_250)).toBe('1.25K')

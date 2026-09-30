@@ -277,16 +277,16 @@
                           </span>
                         </TableCell>
                         <TableCell class="py-2 text-right font-mono">
-                          ${{ tier.input_price_per_1m?.toFixed(2) || '0.00' }}
+                          {{ formatModelPrice(tier.input_price_per_1m) }}
                         </TableCell>
                         <TableCell class="py-2 text-right font-mono">
-                          ${{ tier.output_price_per_1m?.toFixed(2) || '0.00' }}
+                          {{ formatModelPrice(tier.output_price_per_1m) }}
                         </TableCell>
                         <TableCell class="py-2 text-right font-mono text-muted-foreground">
-                          {{ tier.cache_creation_price_per_1m != null ? `$${tier.cache_creation_price_per_1m.toFixed(2)}` : '-' }}
+                          {{ tier.cache_creation_price_per_1m != null ? formatModelPrice(tier.cache_creation_price_per_1m) : '-' }}
                         </TableCell>
                         <TableCell class="py-2 text-right font-mono text-muted-foreground">
-                          {{ tier.cache_read_price_per_1m != null ? `$${tier.cache_read_price_per_1m.toFixed(2)}` : '-' }}
+                          {{ tier.cache_read_price_per_1m != null ? formatModelPrice(tier.cache_read_price_per_1m) : '-' }}
                         </TableCell>
                         <TableCell class="py-2 text-right font-mono text-muted-foreground">
                           {{ get1hCachePrice(tier) }}
@@ -337,7 +337,7 @@ import TableBody from '@/components/ui/table-body.vue'
 import TableRow from '@/components/ui/table-row.vue'
 import TableHead from '@/components/ui/table-head.vue'
 import TableCell from '@/components/ui/table-cell.vue'
-import { formatTokens } from '@/utils/format'
+import { formatModelPrice, formatTokens } from '@/utils/format'
 import ProcessingTierPricingSummary from '@/features/models/components/ProcessingTierPricingSummary.vue'
 
 import type { PublicGlobalModel } from '@/api/public-models'
@@ -367,8 +367,8 @@ function getFirstTierPrice(
   if (!tieredPricing?.tiers?.length) return '-'
   const firstTier = tieredPricing.tiers[0]
   const value = firstTier[priceKey]
-  if (value == null || value === 0) return '-'
-  return `$${value.toFixed(2)}`
+  if (value == null) return '-'
+  return formatModelPrice(value)
 }
 
 function getTierCount(tieredPricing: TieredPricingConfig | undefined | null): number {
@@ -383,7 +383,7 @@ function formatTierLimit(limit: number | null | undefined): string {
 function get1hCachePrice(tier: PricingTier): string {
   const ttl1h = tier.cache_ttl_pricing?.find(t => t.ttl_minutes === 60)
   if (ttl1h) {
-    return `$${ttl1h.cache_creation_price_per_1m.toFixed(2)}`
+    return formatModelPrice(ttl1h.cache_creation_price_per_1m)
   }
   return '-'
 }

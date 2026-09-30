@@ -173,12 +173,15 @@ export function formatModelPrice(price: number | undefined | null): string {
     return '$0.00'
   }
 
-  // Price is already per 1M tokens, no conversion needed
-  if (price < 1) {
-    return `$${  price.toFixed(4).replace(/\.?0+$/, '').padEnd(price.toFixed(4).indexOf('.') + 3, '0')}`
-  } else {
-    return `$${  price.toFixed(2)}`
-  }
+  if (!Number.isFinite(price)) return '-'
+
+  // Preserve configured precision so small non-zero prices never look free.
+  const formatted = price.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 20,
+    useGrouping: false,
+  })
+  return `$${price !== 0 && Number(formatted) === 0 ? price.toString() : formatted}`
 }
 
 // Billing type formatting

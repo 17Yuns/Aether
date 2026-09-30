@@ -396,16 +396,16 @@
                             </span>
                           </TableCell>
                           <TableCell class="py-2 text-right font-mono">
-                            ${{ tier.input_price_per_1m?.toFixed(2) || '0.00' }}
+                            {{ formatModelPrice(tier.input_price_per_1m) }}
                           </TableCell>
                           <TableCell class="py-2 text-right font-mono">
-                            ${{ tier.output_price_per_1m?.toFixed(2) || '0.00' }}
+                            {{ formatModelPrice(tier.output_price_per_1m) }}
                           </TableCell>
                           <TableCell class="py-2 text-right font-mono text-muted-foreground">
-                            {{ tier.cache_creation_price_per_1m != null ? `$${tier.cache_creation_price_per_1m.toFixed(2)}` : '-' }}
+                            {{ tier.cache_creation_price_per_1m != null ? formatModelPrice(tier.cache_creation_price_per_1m) : '-' }}
                           </TableCell>
                           <TableCell class="py-2 text-right font-mono text-muted-foreground">
-                            {{ tier.cache_read_price_per_1m != null ? `$${tier.cache_read_price_per_1m.toFixed(2)}` : '-' }}
+                            {{ tier.cache_read_price_per_1m != null ? formatModelPrice(tier.cache_read_price_per_1m) : '-' }}
                           </TableCell>
                           <TableCell class="py-2 text-right font-mono text-muted-foreground">
                             {{ get1hCachePrice(tier) }}
@@ -562,7 +562,7 @@ import ModelMappingsTab from './ModelMappingsTab.vue'
 import ProcessingTierPricingSummary from './ProcessingTierPricingSummary.vue'
 import { sortResolutionEntries } from '@/utils/form'
 import { parseApiError } from '@/utils/errorParser'
-import { formatCompactNumber, formatTokens } from '@/utils/format'
+import { formatCompactNumber, formatModelPrice, formatTokens } from '@/utils/format'
 import { getGlobalModelRoutingPreview } from '@/api/global-models'
 
 // 使用外部类型定义
@@ -776,8 +776,8 @@ function getFirstTierPrice(
   if (!tieredPricing?.tiers?.length) return '-'
   const firstTier = tieredPricing.tiers[0]
   const value = firstTier[priceKey]
-  if (value == null || value === 0) return '-'
-  return `$${value.toFixed(2)}`
+  if (value == null) return '-'
+  return formatModelPrice(value)
 }
 
 // 获取阶梯数量
@@ -795,7 +795,7 @@ function formatTierLimit(limit: number | null | undefined): string {
 function get1hCachePrice(tier: PricingTier): string {
   const ttl1h = tier.cache_ttl_pricing?.find(t => t.ttl_minutes === 60)
   if (ttl1h) {
-    return `$${ttl1h.cache_creation_price_per_1m.toFixed(2)}`
+    return formatModelPrice(ttl1h.cache_creation_price_per_1m)
   }
   return '-'
 }

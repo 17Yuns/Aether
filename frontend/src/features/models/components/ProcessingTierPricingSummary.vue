@@ -205,7 +205,7 @@ import TableCell from '@/components/ui/table-cell.vue'
 import TableHead from '@/components/ui/table-head.vue'
 import TableHeader from '@/components/ui/table-header.vue'
 import TableRow from '@/components/ui/table-row.vue'
-import { formatTokens } from '@/utils/format'
+import { formatModelPrice, formatTokens } from '@/utils/format'
 import type {
   PricingTier,
   ProcessingTierPricingConfig,
@@ -391,11 +391,7 @@ function formatPixelRange(rows: ImageRangeRow[], index: number): string {
 function formatPrice(value: unknown): string {
   const price = toFiniteNumber(value)
   if (price === null) return '-'
-  return `$${price.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
-    useGrouping: false,
-  })}`
+  return formatModelPrice(price)
 }
 
 function formatImageSize(value: string): string {
