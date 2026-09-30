@@ -3557,9 +3557,26 @@ async fn provider_query_execute_standard_test_candidate(
         timeouts: state.resolve_transport_execution_timeouts(&transport),
     };
 
-    let result = state
+    let result = match state
         .execute_execution_runtime_sync_plan(Some(trace_id), &plan)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(ProviderQueryExecutionOutcome {
+                status: "failed",
+                skip_reason: None,
+                error_message: Some(error.into_message()),
+                status_code: None,
+                latency_ms: None,
+                request_url,
+                request_headers,
+                request_body: provider_request_body,
+                response_headers: BTreeMap::new(),
+                response_body: None,
+            });
+        }
+    };
     let response_body = if result.status_code < 400 {
         provider_query_standard_execution_response_body(
             provider_api_format,
@@ -3567,7 +3584,7 @@ async fn provider_query_execute_standard_test_candidate(
             private_report_context.as_ref(),
         )
     } else {
-        result.body.as_ref().and_then(|body| body.json_body.clone())
+        provider_query_execution_json_body(&result)
     };
     let missing_success_body = result.status_code < 400 && response_body.is_none();
     let did_fail = result.status_code >= 400 || missing_success_body;

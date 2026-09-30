@@ -28,7 +28,7 @@ export interface StartTestParams {
   onSuccess?: (result: TestModelFailoverResponse) => void
   /** Return `true` to indicate the failure has been handled; otherwise the composable sets `testResult`. */
   onFailure?: (result: TestModelFailoverResponse) => boolean | void
-  /** Return `true` to indicate the error has been handled; otherwise a toast is shown and state is reset. */
+  /** Return `true` to indicate the error has been handled; otherwise the failure stays in the dialog. */
   onError?: (err: unknown) => boolean | void
 }
 
@@ -243,6 +243,7 @@ export function useModelTest(options: UseModelTestOptions) {
   function resetState() {
     abortActiveRequest()
     stopPolling()
+    testing.value = false
     dialogOpen.value = false
     testResult.value = null
   }
@@ -324,17 +325,31 @@ export function useModelTest(options: UseModelTestOptions) {
       if (isRequestCancelled(err)) {
         return
       }
-      stopPolling()
+      await refreshTraceSnapshot(reqId)
+      if (abortController.signal.aborted || activeAbortController !== abortController) {
+        return
+      }
+      stopPolling({ clearState: false })
       const handled = params.onError?.(err)
       if (!handled) {
-        showError(`模型测试失败: ${parseApiError(err, '测试请求失败')}`)
-        resetState()
+        const error = parseApiError(err, '测试请求失败')
+        testResult.value = {
+          success: false,
+          model: params.modelName,
+          provider: { id: providerId(), name: providerId() },
+          attempts: [],
+          total_candidates: 0,
+          total_attempts: 0,
+          data: null,
+          error,
+        }
+        showError(`模型测试失败: ${error}`)
       }
     } finally {
       if (activeAbortController === abortController) {
         activeAbortController = null
+        testing.value = false
       }
-      testing.value = false
     }
   }
 

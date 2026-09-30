@@ -749,11 +749,6 @@ async function handleStartPendingTest() {
     mappedModelName: mappedTestModelName.value ?? undefined,
     requestHeaders,
     requestBody,
-    onError: () => {
-      if (activeEndpoints.value.length > 1) {
-        return true
-      }
-    },
   })
 }
 

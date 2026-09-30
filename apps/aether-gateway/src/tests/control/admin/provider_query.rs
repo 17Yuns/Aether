@@ -5415,36 +5415,70 @@ fn gateway_handles_openai_responses_test_model_failover_locally() {
 }
 
 async fn gateway_handles_openai_responses_test_model_failover_locally_impl() {
+    let failure_mode = Arc::new(Mutex::new(0_u8));
+    let failure_mode_in_handler = failure_mode.clone();
     let execution_runtime = Router::new().route(
         "/v1/execute/sync",
-        any(move |Json(plan): Json<ExecutionPlan>| async move {
-            assert_eq!(plan.provider_id, "provider-openai");
-            assert_eq!(plan.endpoint_id, "endpoint-openai-cli");
-            assert_eq!(plan.key_id, "key-openai-cli");
-            assert_eq!(plan.provider_api_format, "openai:responses");
-            assert_eq!(plan.model_name.as_deref(), Some("gpt-5.4-mini"));
-            Json(json!({
-                "request_id": plan.request_id,
-                "candidate_id": plan.candidate_id,
-                "status_code": 200,
-                "headers": {
-                    "content-type": "application/json"
-                },
-                "body": {
-                    "json_body": {
-                        "id": "chatcmpl-openai-cli-failover",
-                        "choices": [{
-                            "message": {
-                                "role": "assistant",
-                                "content": "OpenAI Responses failover path succeeded"
-                            }
-                        }]
-                    }
-                },
-                "telemetry": {
-                    "elapsed_ms": 15
+        any(move |Json(plan): Json<ExecutionPlan>| {
+            let failure_mode = failure_mode_in_handler.clone();
+            async move {
+                assert_eq!(plan.provider_id, "provider-openai");
+                assert_eq!(plan.endpoint_id, "endpoint-openai-cli");
+                assert_eq!(plan.key_id, "key-openai-cli");
+                assert_eq!(plan.provider_api_format, "openai:responses");
+                assert_eq!(plan.model_name.as_deref(), Some("gpt-5.4-mini"));
+                assert!(!plan.stream);
+                let failure_mode = *failure_mode.lock().expect("failure mode");
+                if failure_mode == 1 {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error": "execution transport unavailable"})),
+                    );
                 }
-            }))
+                if failure_mode == 2 {
+                    let error_body = json!({
+                        "error": {"message": "Provider rejected the Responses request"}
+                    });
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "request_id": plan.request_id,
+                            "candidate_id": plan.candidate_id,
+                            "status_code": 400,
+                            "headers": {"content-type": "application/json"},
+                            "body": {
+                                "body_bytes_b64": base64::engine::general_purpose::STANDARD
+                                    .encode(error_body.to_string())
+                            }
+                        })),
+                    );
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "request_id": plan.request_id,
+                        "candidate_id": plan.candidate_id,
+                        "status_code": 200,
+                        "headers": {
+                            "content-type": "application/json"
+                        },
+                        "body": {
+                            "json_body": {
+                                "id": "chatcmpl-openai-cli-failover",
+                                "choices": [{
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "OpenAI Responses failover path succeeded"
+                                    }
+                                }]
+                            }
+                        },
+                        "telemetry": {
+                            "elapsed_ms": 15
+                        }
+                    })),
+                )
+            }
         }),
     );
 
@@ -5501,6 +5535,54 @@ async fn gateway_handles_openai_responses_test_model_failover_locally_impl() {
         payload["data"]["response"]["choices"][0]["message"]["content"],
         json!("OpenAI Responses failover path succeeded")
     );
+
+    for mode in [1, 2] {
+        *failure_mode.lock().expect("failure mode") = mode;
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{gateway_url}/api/admin/provider-query/test-model-failover"
+            ))
+            .header(GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .json(&json!({
+                "provider_id": "provider-openai",
+                "failover_models": ["gpt-5.4-mini"],
+                "api_format": "openai:responses"
+            }))
+            .send()
+            .await
+            .expect("failed test should return its attempt details");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().await.expect("failure should parse");
+        assert_eq!(payload["success"], false);
+        assert_eq!(payload["total_attempts"], 1);
+        let attempt = &payload["attempts"][0];
+        assert_eq!(attempt["status"], "failed");
+        assert!(attempt["error_message"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(
+            attempt["request_url"],
+            "https://api.openai.example/v1/responses"
+        );
+        assert_eq!(attempt["request_body"]["stream"], false);
+        assert_eq!(attempt["request_headers"]["authorization"], "[REDACTED]");
+        assert!(payload["data"].is_null());
+        assert!(!payload.to_string().contains("sk-test-cli"));
+        if mode == 2 {
+            assert_eq!(attempt["status_code"], 400);
+            assert_eq!(
+                attempt["error_message"],
+                "Provider rejected the Responses request"
+            );
+            assert_eq!(
+                attempt["response_body"]["error"]["message"],
+                "Provider rejected the Responses request"
+            );
+        }
+    }
 
     gateway_handle.abort();
     execution_runtime_handle.abort();
@@ -6877,9 +6959,7 @@ async fn gateway_retries_non_kiro_failover_after_success_status_without_body_imp
     assert_eq!(attempts[0]["status_code"], json!(200));
     assert_eq!(
         attempts[0]["error_message"],
-        // Attempt diagnostics intentionally expose only the status class;
-        // detailed provider response text is not returned to the admin UI.
-        json!("HTTP 200")
+        json!("Provider returned HTTP 200 without a model-test response body")
     );
     assert_eq!(attempts[1]["status"], json!("success"));
 

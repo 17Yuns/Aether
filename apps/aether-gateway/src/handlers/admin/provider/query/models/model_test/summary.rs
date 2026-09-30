@@ -11,7 +11,7 @@ pub(super) fn provider_query_test_attempt_payload(
     execution: &ProviderQueryExecutionOutcome,
 ) -> Value {
     let endpoint_route = provider_query_endpoint_route_payload(candidate, execution);
-    let response_body = provider_query_success_response_body(execution);
+    let response_body = provider_query_redacted_response_body(execution);
     let endpoint_product = endpoint_route
         .get("product")
         .cloned()
@@ -54,11 +54,18 @@ pub(super) fn provider_query_test_attempt_payload(
 pub(super) fn provider_query_error_projection(
     execution: &ProviderQueryExecutionOutcome,
 ) -> Option<String> {
-    execution.error_message.as_ref().map(|_| {
-        execution
-            .status_code
-            .map(|status| format!("HTTP {status}"))
-            .unwrap_or_else(|| "Provider request failed".to_string())
+    execution.error_message.as_ref().map(|message| {
+        let sensitive_values = provider_query_execution_sensitive_values(execution);
+        if !message.trim().is_empty()
+            && !provider_query_string_contains_sensitive_material(message, &sensitive_values)
+        {
+            message.clone()
+        } else {
+            execution
+                .status_code
+                .map(|status| format!("HTTP {status}"))
+                .unwrap_or_else(|| "Provider request failed".to_string())
+        }
     })
 }
 
@@ -219,6 +226,12 @@ pub(super) fn provider_query_success_response_body(
         return None;
     }
 
+    provider_query_redacted_response_body(execution)
+}
+
+fn provider_query_redacted_response_body(
+    execution: &ProviderQueryExecutionOutcome,
+) -> Option<Value> {
     let sensitive_values = provider_query_execution_sensitive_values(execution);
     execution
         .response_body
@@ -636,8 +649,9 @@ pub(super) fn provider_query_candidate_summary_payload(
 #[cfg(test)]
 mod tests {
     use super::{
-        provider_query_test_attempt_payload, redacted_provider_query_headers,
-        redacted_provider_query_value, ProviderQueryExecutionOutcome, ProviderQueryTestCandidate,
+        provider_query_success_response_body, provider_query_test_attempt_payload,
+        redacted_provider_query_headers, redacted_provider_query_value,
+        ProviderQueryExecutionOutcome, ProviderQueryTestCandidate,
     };
     use aether_data_contracts::repository::provider_catalog::{
         StoredProviderCatalogEndpoint, StoredProviderCatalogKey,
@@ -706,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn attempt_payload_does_not_reflect_upstream_error_text_or_response_secrets() {
+    fn failed_attempt_keeps_details_without_reflecting_response_secrets() {
         let candidate = ProviderQueryTestCandidate {
             endpoint: StoredProviderCatalogEndpoint::new(
                 "endpoint-1".to_string(),
@@ -752,7 +766,9 @@ mod tests {
 
         let payload = provider_query_test_attempt_payload(0, &candidate, &execution);
         assert_eq!(payload["error_message"], json!("HTTP 502"));
-        assert!(payload["response_body"].is_null());
+        assert_eq!(payload["response_body"]["error"]["message"], "[REDACTED]");
+        assert_eq!(payload["response_body"]["access_token"], "[REDACTED]");
+        assert!(provider_query_success_response_body(&execution).is_none());
         let serialized = payload.to_string();
         for secret in [
             "upstream-secret",
@@ -765,7 +781,38 @@ mod tests {
             assert!(!serialized.contains(secret), "leaked {secret}");
         }
 
+        execution.error_message = Some("Provider rejected the Responses request".to_string());
+        execution.response_body = Some(json!({
+            "error": {"message": "Provider rejected the Responses request"}
+        }));
+        let visible_failure_payload =
+            provider_query_test_attempt_payload(0, &candidate, &execution);
+        assert_eq!(
+            visible_failure_payload["error_message"],
+            "Provider rejected the Responses request"
+        );
+        assert_eq!(
+            visible_failure_payload["response_body"],
+            execution.response_body.clone().unwrap()
+        );
+        assert!(provider_query_success_response_body(&execution).is_none());
+
+        execution.request_headers.insert(
+            "authorization".to_string(),
+            "Bearer opaque-provider-value-123".to_string(),
+        );
+        execution.error_message = Some("Upstream echoed opaque-provider-value-123".to_string());
+        execution.response_body = Some(json!({"echo": "opaque-provider-value-123"}));
+        let echoed_failure_payload = provider_query_test_attempt_payload(0, &candidate, &execution);
+        assert_eq!(echoed_failure_payload["error_message"], "HTTP 502");
+        assert_eq!(
+            echoed_failure_payload["response_body"]["echo"],
+            "[REDACTED]"
+        );
+
         execution.status_code = None;
+        execution.error_message = Some("authorization=Bearer upstream-secret".to_string());
+        execution.response_body = None;
         let network_failure_payload =
             provider_query_test_attempt_payload(0, &candidate, &execution);
         assert_eq!(
