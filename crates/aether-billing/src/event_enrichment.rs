@@ -9,6 +9,7 @@ use aether_usage_runtime::{UsageEvent, UsageEventType};
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
+use crate::groups::{PricingGroup, PRICING_GROUP_SNAPSHOT_KEY};
 use crate::{
     BillingComputation, BillingModelPricingSnapshot, BillingService, BillingSnapshotStatus,
     BillingUsageInput,
@@ -18,6 +19,13 @@ const SETTLEMENT_SNAPSHOT_SCHEMA_VERSION: &str = "3.0";
 
 #[async_trait]
 pub trait BillingModelContextLookup: Send + Sync {
+    async fn find_pricing_group_for_api_key(
+        &self,
+        _user_id: Option<&str>,
+        _api_key_id: Option<&str>,
+    ) -> Result<Option<PricingGroup>, DataLayerError> {
+        Ok(None)
+    }
     async fn find_billing_model_context_by_model_id(
         &self,
         provider_id: &str,
@@ -95,6 +103,43 @@ pub async fn enrich_usage_event_with_billing(
     else {
         return Ok(());
     };
+    let pricing_group = match event
+        .data
+        .request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(PRICING_GROUP_SNAPSHOT_KEY))
+    {
+        Some(Value::Null) => None,
+        Some(value) => Some(
+            serde_json::from_value::<PricingGroup>(value.clone()).map_err(|_| {
+                DataLayerError::InvalidInput("invalid pricing group snapshot".to_string())
+            })?,
+        ),
+        None => {
+            data.find_pricing_group_for_api_key(
+                event.data.user_id.as_deref(),
+                event.data.api_key_id.as_deref(),
+            )
+            .await?
+        }
+    };
+    if pricing_group
+        .as_ref()
+        .is_some_and(|group| !group.multiplier.is_finite() || group.multiplier < 0.0)
+    {
+        return Err(DataLayerError::InvalidInput(
+            "invalid pricing group multiplier".to_string(),
+        ));
+    }
+    let group_value = serde_json::to_value(&pricing_group)
+        .map_err(|error| DataLayerError::UnexpectedValue(error.to_string()))?;
+    event
+        .data
+        .request_metadata
+        .get_or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| DataLayerError::InvalidInput("invalid usage metadata".to_string()))?
+        .insert(PRICING_GROUP_SNAPSHOT_KEY.to_string(), group_value);
     if let Some(model_id) = event
         .data
         .model_id
@@ -110,8 +155,12 @@ pub async fn enrich_usage_event_with_billing(
             )
             .await?
         {
-            let pricing = map_pricing_context(context);
-            let computation = calculate_billing_computation(&pricing, event)?;
+            let pricing = crate::groups::customer_pricing_snapshot(
+                map_pricing_context(context),
+                pricing_group.as_ref(),
+            );
+            let computation =
+                calculate_billing_computation(&pricing, event, pricing_group.as_ref())?;
             apply_billing_computation(event, &pricing, computation)?;
             return Ok(());
         }
@@ -130,8 +179,11 @@ pub async fn enrich_usage_event_with_billing(
             continue;
         };
 
-        let pricing = map_pricing_context(context);
-        let computation = calculate_billing_computation(&pricing, event)?;
+        let pricing = crate::groups::customer_pricing_snapshot(
+            map_pricing_context(context),
+            pricing_group.as_ref(),
+        );
+        let computation = calculate_billing_computation(&pricing, event, pricing_group.as_ref())?;
         if matches!(
             computation.cost_result.status,
             BillingSnapshotStatus::NoRule
@@ -195,6 +247,7 @@ fn billing_model_lookup_names(data: &aether_usage_runtime::UsageEventData) -> Ve
 fn calculate_billing_computation(
     pricing: &BillingModelPricingSnapshot,
     event: &UsageEvent,
+    group: Option<&PricingGroup>,
 ) -> Result<BillingComputation, DataLayerError> {
     let failed =
         event.data.status_code.unwrap_or_default() >= 400 || event.data.error_message.is_some();
@@ -265,11 +318,14 @@ fn calculate_billing_computation(
         input.image_count = 0;
     }
 
-    BillingService::new()
+    let mut computation = BillingService::new()
         .calculate(pricing, &input)
         .map_err(|err| {
             DataLayerError::UnexpectedValue(format!("billing calculation failed: {err}"))
-        })
+        })?;
+    crate::groups::apply_group_multiplier(&mut computation, group)
+        .map_err(DataLayerError::UnexpectedValue)?;
+    Ok(computation)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2060,5 +2116,34 @@ mod tests {
                 .and_then(Value::as_str),
             Some("complete")
         );
+    }
+    #[tokio::test]
+    async fn group_snapshot_controls_charge_and_survives_usage_projection_and_replay() {
+        let lookup = wire_billing_lookup(None, Some(2.0));
+        let mut event = wire_billing_event("group-snapshot");
+        let group = json!({"id": "vip", "name": "VIP", "multiplier": 0.5, "is_visible": true});
+        event.data.request_metadata.as_mut().unwrap()["pricing_group"] = group.clone();
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .unwrap();
+        assert_eq!(event.data.total_cost_usd, Some(2.0));
+        assert_eq!(event.data.actual_total_cost_usd, Some(1.0));
+        event.data.request_metadata =
+            aether_data_contracts::repository::usage::sanitize_usage_request_metadata(
+                event.data.request_metadata.take(),
+            );
+        assert_eq!(
+            event.data.request_metadata.as_ref().unwrap()["pricing_group"],
+            group
+        );
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .unwrap();
+        assert_eq!(event.data.actual_total_cost_usd, Some(1.0));
+        event.data.request_metadata.as_mut().unwrap()["pricing_group"] = Value::Null;
+        enrich_usage_event_with_billing(&lookup, &mut event)
+            .await
+            .unwrap();
+        assert_eq!(event.data.actual_total_cost_usd, Some(2.0));
     }
 }

@@ -437,6 +437,34 @@
           </p>
         </div>
 
+        <div
+          v-if="pricingGroups.enabled"
+          class="space-y-2"
+        >
+          <Label for="key-pricing-group">定价分组</Label>
+          <select
+            id="key-pricing-group"
+            v-model="newKeyPricingGroup"
+            class="w-full h-11 rounded-md border border-border/60 bg-background px-3"
+          >
+            <option
+              v-for="group in pricingGroups.groups"
+              :key="group.id"
+              :value="group.id"
+            >
+              {{ group.name }} · {{ group.multiplier }}×
+            </option>
+            <option
+              v-if="editingApiKey && !pricingGroups.groups.some(group => group.id === newKeyPricingGroup)"
+              :value="newKeyPricingGroup"
+            >
+              当前专属分组
+            </option>
+          </select>
+          <p class="text-xs text-muted-foreground">
+            实际价格为模型基础售价乘以分组倍率。
+          </p>
+        </div>
         <div class="space-y-2">
           <Label
             for="key-rate-limit"
@@ -914,6 +942,7 @@
 <script setup lang="ts">
 import { getI18nLocale } from '@/i18n'
 import { ref, onMounted, onBeforeUnmount, computed, watch, reactive } from 'vue'
+import { pricingGroupsApi, type PricingGroupsConfig } from '@/api/pricing-groups'
 import { meApi, type ApiKey, type InstallSessionTargetSystem, type InstallTargetCli, type ApiKeyInstallSession } from '@/api/me'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
@@ -1002,6 +1031,9 @@ const showDeleteDialog = ref(false)
 const showInstallDialog = ref(false)
 const showCcSwitchDialog = ref(false)
 
+const pricingGroups = ref<PricingGroupsConfig>({ enabled: false, default_group_id: '', groups: [] })
+const pricingGroupsLoaded = ref(false)
+const newKeyPricingGroup = ref('')
 const newKeyName = ref('')
 const newKeyRateLimit = ref<number | undefined>(undefined)
 const newKeyConcurrentLimit = ref<number | undefined>(undefined)
@@ -1091,6 +1123,10 @@ const ccSwitchModelHelpText = computed(() =>
 onMounted(() => {
   installSystem.value = detectCurrentSystem()
   loadApiKeys()
+  pricingGroupsApi.getVisible().then(config => {
+    pricingGroups.value = config
+    pricingGroupsLoaded.value = true
+  }).catch(reason => showError(parseApiError(reason, '加载定价分组失败')))
 })
 
 onBeforeUnmount(() => {
@@ -1145,6 +1181,7 @@ function openEditApiKeyDialog(apiKey: ApiKey) {
   const redactionFeature = readChatPiiRedactionFeatureSettings(apiKey.feature_settings)
   editingApiKey.value = apiKey
   newKeyName.value = apiKey.name || ''
+  newKeyPricingGroup.value = apiKey.pricing_group_id ?? pricingGroups.value.default_group_id
   newKeyRateLimit.value = apiKey.rate_limit ?? undefined
   newKeyConcurrentLimit.value = apiKey.concurrent_limit ?? undefined
   newKeyIpRulesText.value = apiKey.ip_rules?.join(', ') ?? ''
@@ -1158,6 +1195,7 @@ function openCreateApiKeyDialog() {
   editingApiKey.value = null
   createdApiKey.value = null
   newKeyName.value = ''
+  newKeyPricingGroup.value = pricingGroups.value.default_group_id
   newKeyRateLimit.value = undefined
   newKeyConcurrentLimit.value = undefined
   newKeyIpRulesText.value = ''
@@ -1455,6 +1493,10 @@ async function saveApiKey() {
     return
   }
 
+  if (!pricingGroupsLoaded.value) {
+    showError('定价分组尚未加载，请稍后重试')
+    return
+  }
   creating.value = true
   try {
     const ipRules = parseIpRulesInput(newKeyIpRulesText.value)
@@ -1462,6 +1504,7 @@ async function saveApiKey() {
     if (editingApiKey.value) {
       await meApi.updateApiKey(editingApiKey.value.id, {
         name: newKeyName.value,
+        ...(pricingGroups.value.enabled ? { pricing_group_id: newKeyPricingGroup.value || null } : {}),
         rate_limit: newKeyRateLimit.value ?? 0,
         concurrent_limit: newKeyConcurrentLimit.value,
         ip_rules: ipRules,
@@ -1476,6 +1519,7 @@ async function saveApiKey() {
     } else {
       const newKey = await meApi.createApiKey({
         name: newKeyName.value,
+        ...(pricingGroups.value.enabled ? { pricing_group_id: newKeyPricingGroup.value || null } : {}),
         rate_limit: newKeyRateLimit.value ?? 0,
         concurrent_limit: newKeyConcurrentLimit.value,
         ip_rules: ipRules,

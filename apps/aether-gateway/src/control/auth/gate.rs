@@ -252,6 +252,66 @@ async fn estimate_execution_plan_cost_upper_bound_usd_inner(
         );
     let model_id = report_context_string_field(report_context, "model_id");
     let global_model_name = report_context_string_field(report_context, "global_model_name");
+    if let Some(group_value) = report_context
+        .and_then(|context| context.get("pricing_group"))
+        .filter(|value| !value.is_null())
+    {
+        let group: aether_billing::groups::PricingGroup =
+            serde_json::from_value(group_value.clone())
+                .map_err(|error| GatewayError::Internal(error.to_string()))?;
+        if model_id.is_none() && global_model_name.is_none() {
+            return Ok(None);
+        }
+        let Some(context) =
+            load_execution_plan_billing_context(state, plan, model_id, global_model_name).await?
+        else {
+            return Ok(None);
+        };
+        let pricing =
+            aether_billing::groups::customer_pricing_snapshot(context.into(), Some(&group));
+        pricing
+            .validate_authorization_pricing_configuration(requested_processing_tier.as_deref())
+            .map_err(|error| GatewayError::Internal(error.to_string()))?;
+        let Some(task_type) = authorization_task_type(&api_format, report_context) else {
+            return Ok(None);
+        };
+        let Some(body) = body_json else {
+            return Ok(None);
+        };
+        if !openai_request_input_is_self_contained(&api_format, body) {
+            return Ok(None);
+        }
+        let Ok(input_tokens) = i64::try_from(json_token_count_upper_bound(body)) else {
+            return Ok(None);
+        };
+        let mut estimate =
+            aether_billing::BillingAuthorizationEstimateInput::new(task_type, input_tokens);
+        estimate.api_format = Some(api_format.clone());
+        estimate.requested_processing_tier = requested_processing_tier;
+        estimate.max_output_tokens = max_output_tokens_from_request(body)
+            .map(|value| value.saturating_mul(output_choice_count_upper_bound(&api_format, body)))
+            .and_then(|value| i64::try_from(value).ok());
+        estimate.cache_ttl_minutes =
+            aether_data_contracts::repository::usage::resolve_provider_cache_ttl_minutes(
+                Some(&api_format),
+                plan.model_name.as_deref(),
+                global_model_name,
+                Some(body),
+            );
+        // A group snapshot bypasses the legacy provider-key cache, whose key
+        // does not distinguish customer groups or changes to their multipliers.
+        return aether_billing::BillingService::new()
+            .estimate_authorization_cost_upper_bound(&pricing, &estimate)
+            .map_err(|error| GatewayError::Internal(error.to_string()))?
+            .map(|cost| {
+                let cost = aether_billing::quantize_cost(cost * group.multiplier);
+                if !cost.is_finite() || cost < 0.0 {
+                    return Err(GatewayError::Internal("分组计费金额无效".to_string()));
+                }
+                Ok(cost)
+            })
+            .transpose();
+    }
     let Some(task_type) = authorization_task_type(&api_format, report_context) else {
         validate_execution_plan_pricing_for_unavailable_estimate(
             state,

@@ -189,6 +189,35 @@ impl MinimalCandidateSelectionRowSource for GatewayDataState {
 
 #[async_trait]
 impl BillingModelContextLookup for GatewayDataState {
+    async fn find_pricing_group_for_api_key(
+        &self,
+        user_id: Option<&str>,
+        api_key_id: Option<&str>,
+    ) -> Result<Option<aether_billing::groups::PricingGroup>, DataLayerError> {
+        use aether_billing::groups::{
+            pricing_group_id, PricingGroupsConfig, PRICING_GROUPS_CONFIG_KEY,
+        };
+        let config = PricingGroupsConfig::from_value(
+            self.find_system_config_value_strong(PRICING_GROUPS_CONFIG_KEY)
+                .await?,
+        )
+        .map_err(DataLayerError::InvalidInput)?;
+        if !config.enabled {
+            return Ok(None);
+        }
+        let settings = if let Some(api_key_id) = api_key_id {
+            self.list_auth_api_key_export_records_by_ids(&[api_key_id.to_string()])
+                .await?
+                .into_iter()
+                .find(|record| user_id.is_none_or(|id| record.user_id == id))
+                .and_then(|record| record.feature_settings)
+        } else {
+            None
+        };
+        config
+            .resolve(pricing_group_id(settings.as_ref()).map_err(DataLayerError::InvalidInput)?)
+            .map_err(DataLayerError::InvalidInput)
+    }
     async fn find_billing_model_context_by_model_id(
         &self,
         provider_id: &str,

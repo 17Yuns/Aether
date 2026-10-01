@@ -563,6 +563,17 @@ fn build_users_me_usage_record_payload(
     let rate_multiplier = item.settlement_rate_multiplier();
     let client_is_stream = users_me_usage_client_is_stream(item);
     let upstream_is_stream = users_me_usage_upstream_is_stream(item);
+    let group_multiplier = item
+        .request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("pricing_group"))
+        .and_then(|group| group.get("multiplier"))
+        .and_then(serde_json::Value::as_f64);
+    let customer_multiplier = if include_actual_cost {
+        1.0
+    } else {
+        group_multiplier.unwrap_or(1.0)
+    };
     let mut payload = json!({
         "id": item.id,
         "model": item.model,
@@ -575,7 +586,7 @@ fn build_users_me_usage_record_payload(
         "effective_input_tokens": users_me_usage_effective_input_tokens(item),
         "output_tokens": item.output_tokens,
         "total_tokens": item.total_tokens,
-        "cost": round_to(item.total_cost_usd, 6),
+        "cost": round_to(if !include_actual_cost && group_multiplier.is_some() { item.actual_total_cost_usd } else { item.total_cost_usd }, 6),
         "response_time_ms": item.response_time_ms,
         "first_byte_time_ms": item.first_byte_time_ms,
         "is_stream": item.is_stream,
@@ -603,10 +614,10 @@ fn build_users_me_usage_record_payload(
         "status_code": item.status_code,
         "error_message": users_me_usage_public_error_message(item),
         "request_type": item.request_type,
-        "input_price_per_1m": input_price_per_1m,
-        "output_price_per_1m": output_price_per_1m,
-        "cache_creation_price_per_1m": cache_creation_price_per_1m,
-        "cache_read_price_per_1m": cache_read_price_per_1m,
+        "input_price_per_1m": input_price_per_1m.map(|price| price * customer_multiplier),
+        "output_price_per_1m": output_price_per_1m.map(|price| price * customer_multiplier),
+        "cache_creation_price_per_1m": cache_creation_price_per_1m.map(|price| price * customer_multiplier),
+        "cache_read_price_per_1m": cache_read_price_per_1m.map(|price| price * customer_multiplier),
         "api_key": build_users_me_usage_api_key_payload(
             item,
             api_key_names,
@@ -656,7 +667,7 @@ fn build_users_me_usage_active_payload(item: &StoredRequestUsageAudit) -> serde_
         "cache_creation_ephemeral_5m_input_tokens": item.cache_creation_ephemeral_5m_input_tokens,
         "cache_creation_ephemeral_1h_input_tokens": item.cache_creation_ephemeral_1h_input_tokens,
         "cache_read_input_tokens": item.cache_read_input_tokens,
-        "cost": round_to(item.total_cost_usd, 6),
+        "cost": round_to(if item.request_metadata.as_ref().and_then(|metadata| metadata.get("pricing_group")).is_some_and(|group| group.is_object()) { item.actual_total_cost_usd } else { item.total_cost_usd }, 6),
         "actual_cost": round_to(item.actual_total_cost_usd, 6),
         "rate_multiplier": item.settlement_rate_multiplier(),
         "response_time_ms": item.response_time_ms,
@@ -1320,7 +1331,28 @@ pub(super) async fn handle_users_me_usage_get(
     let total_input_tokens = usage_summary.input_tokens;
     let total_output_tokens = usage_summary.output_tokens;
     let total_tokens = usage_summary.total_tokens;
-    let total_cost = round_to(usage_summary.total_cost_usd, 6);
+    let group_pricing_enabled = !include_actual_cost
+        && state
+            .read_pricing_groups_config()
+            .await
+            .map(|config| config.enabled)
+            .unwrap_or(false);
+    if group_pricing_enabled {
+        for row in &mut summary_by_model {
+            row.total_cost_usd = row.actual_total_cost_usd;
+        }
+        for row in &mut summary_by_api_format {
+            row.total_cost_usd = row.actual_total_cost_usd;
+        }
+    }
+    let total_cost = round_to(
+        if group_pricing_enabled {
+            usage_summary.actual_total_cost_usd
+        } else {
+            usage_summary.total_cost_usd
+        },
+        6,
+    );
     let total_actual_cost = round_to(usage_summary.actual_total_cost_usd, 6);
     let avg_response_time = if usage_summary.response_time_samples == 0 {
         0.0
@@ -1609,6 +1641,12 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
     let include_actual_cost = auth.user.role.eq_ignore_ascii_case("admin");
     let grouped: std::collections::HashMap<String, _> =
         summaries.into_iter().map(|s| (s.date.clone(), s)).collect();
+    let group_pricing_enabled = !include_actual_cost
+        && state
+            .read_pricing_groups_config()
+            .await
+            .map(|config| config.enabled)
+            .unwrap_or(false);
 
     let mut max_requests = 0_u64;
     let mut active_days = 0_u64;
@@ -1635,7 +1673,7 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
             "date": date_str,
             "requests": requests,
             "total_tokens": total_tokens,
-            "total_cost": round_to(total_cost, 6),
+            "total_cost": round_to(if group_pricing_enabled { actual_total_cost } else { total_cost }, 6),
         });
         if include_actual_cost {
             day["actual_total_cost"] = json!(round_to(actual_total_cost, 6));
@@ -2290,5 +2328,22 @@ mod tests {
         assert_eq!(active_payload["upstream_is_stream"], true);
         assert_eq!(active_payload["client_requested_stream"], false);
         assert_eq!(active_payload["client_is_stream"], false);
+    }
+    #[test]
+    fn user_usage_record_displays_group_charge_while_admin_retains_base_cost() {
+        let item = StoredRequestUsageAudit {
+            total_cost_usd: 2.0,
+            actual_total_cost_usd: 1.0,
+            request_metadata: Some(
+                json!({"pricing_group": {"id": "vip", "name": "VIP", "multiplier": 0.5, "is_visible": true}}),
+            ),
+            ..sample_usage("completed")
+        };
+        let user = build_users_me_usage_record_payload(&item, false, &BTreeMap::new(), false);
+        assert_eq!(user["cost"], 1.0);
+        assert!(user.get("actual_cost").is_none());
+        let admin = build_users_me_usage_record_payload(&item, true, &BTreeMap::new(), false);
+        assert_eq!(admin["cost"], 2.0);
+        assert_eq!(admin["actual_cost"], 1.0);
     }
 }

@@ -39,6 +39,26 @@
         />
       </div>
 
+      <div
+        v-if="pricingGroups?.enabled"
+        class="space-y-2"
+      >
+        <Label for="admin-user-key-pricing-group">定价分组</Label>
+        <select
+          id="admin-user-key-pricing-group"
+          :value="form.pricing_group_id"
+          class="h-10 w-full rounded-md border bg-background px-3"
+          @change="updateField('pricing_group_id', ($event.target as HTMLSelectElement).value)"
+        >
+          <option
+            v-for="group in pricingGroups.groups"
+            :key="group.id"
+            :value="group.id"
+          >
+            {{ group.name }} · {{ group.multiplier }}×{{ group.is_visible ? '' : '（用户不可见）' }}
+          </option>
+        </select>
+      </div>
       <div class="space-y-2">
         <Label
           for="admin-user-key-rate-limit"
@@ -167,7 +187,7 @@
       </Button>
       <Button
         class="h-10 px-5"
-        :disabled="creating"
+        :disabled="creating || pricingGroupsLoading"
         @click="$emit('submit')"
       >
         {{ submitLabel }}
@@ -177,7 +197,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { pricingGroupsApi, type PricingGroupsConfig } from '@/api/pricing-groups'
+import { useToast } from '@/composables/useToast'
+import { parseApiError } from '@/utils/errorParser'
 import { Key } from 'lucide-vue-next'
 import { Button, Dialog, Input, Label, Switch } from '@/components/ui'
 import { useI18n } from '@/i18n'
@@ -185,6 +208,7 @@ import { parseNumberInput } from '@/utils/form'
 
 export interface UserApiKeyFormState {
   name: string
+  pricing_group_id?: string | null
   rate_limit?: number
   concurrent_limit?: number
   ip_rules_text: string
@@ -207,6 +231,25 @@ const emit = defineEmits<{
 }>()
 
 const { legacyT } = useI18n()
+
+const pricingGroups = ref<PricingGroupsConfig | null>(null)
+const pricingGroupsLoading = ref(true)
+const { error } = useToast()
+let loadVersion = 0
+watch(() => props.open, async open => {
+  const version = ++loadVersion
+  if (!open) return
+  pricingGroupsLoading.value = true
+  try {
+    const result = await pricingGroupsApi.getAdmin()
+    if (version !== loadVersion) return
+    pricingGroups.value = result
+    if (result.enabled && !props.form.pricing_group_id) updateField('pricing_group_id', result.default_group_id)
+    pricingGroupsLoading.value = false
+  } catch (reason) {
+    if (version === loadVersion) error(parseApiError(reason, '定价分组加载失败'))
+  }
+})
 
 const submitLabel = computed(() => {
   if (props.creating) {

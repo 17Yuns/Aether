@@ -184,6 +184,7 @@ export interface ApiKey {
   name: string
   key?: string
   key_display: string
+  pricing_group_id?: string | null
   is_active: boolean
   is_locked: boolean  // 管理员锁定标志
   last_used_at?: string | null
@@ -278,7 +279,7 @@ export const meApi = {
     return response.data
   },
 
-  async createApiKey(data: { name: string; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null }): Promise<ApiKey> {
+  async createApiKey(data: { name: string; pricing_group_id?: string | null; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null }): Promise<ApiKey> {
     const response = await apiClient.post<ApiKey>('/api/users/me/api-keys', data)
     return response.data
   },
@@ -318,7 +319,7 @@ export const meApi = {
 
   async updateApiKey(
     keyId: string,
-    data: { name?: string; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null | undefined }
+    data: { name?: string; pricing_group_id?: string | null; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null | undefined }
   ): Promise<ApiKey & { message: string }> {
     const response = await apiClient.put<ApiKey & { message: string }>(
       `/api/users/me/api-keys/${keyId}`,
@@ -460,6 +461,7 @@ export const meApi = {
 
   // 获取用户可用的模型列表
   async getAvailableModels(params?: {
+    pricing_group_id?: string
     skip?: number
     limit?: number
     search?: string

@@ -16,6 +16,7 @@ mod collectors;
 mod payments;
 mod plans;
 mod presets;
+mod pricing_groups;
 mod routes;
 mod rules;
 mod wallets;

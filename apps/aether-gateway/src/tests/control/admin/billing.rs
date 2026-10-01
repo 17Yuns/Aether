@@ -657,3 +657,55 @@ async fn gateway_handles_admin_billing_collector_routes_locally_with_trusted_adm
     gateway_handle.abort();
     upstream_handle.abort();
 }
+
+#[tokio::test]
+async fn gateway_admin_pricing_groups_persist_and_reject_invalid_multipliers() {
+    let data = GatewayDataState::disabled()
+        .with_system_config_values_for_tests(Vec::<(String, serde_json::Value)>::new());
+    let state = AppState::new().unwrap().with_data_state_for_tests(data);
+    let (url, handle) = start_server(build_router_with_state(state)).await;
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::GET,
+        "/api/admin/billing/pricing-groups",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut config: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(config["enabled"], false);
+    config["enabled"] = json!(true);
+    config["groups"][0]["multiplier"] = json!(0.5);
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::PUT,
+        "/api/admin/billing/pricing-groups",
+        Some(config.clone()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::GET,
+        "/api/admin/billing/pricing-groups",
+        None,
+    )
+    .await;
+    assert_eq!(response.json::<serde_json::Value>().await.unwrap(), config);
+    config["groups"][0]["multiplier"] = json!(-1);
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::PUT,
+        "/api/admin/billing/pricing-groups",
+        Some(config),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = reqwest::Client::new()
+        .get(format!("{url}/api/admin/billing/pricing-groups"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    handle.abort();
+}

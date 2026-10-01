@@ -382,6 +382,7 @@ mod tests {
             routing_policy: None,
             routing_trace_seed: None,
             routing_context: None,
+            pricing_group: None,
             model_directive_policy: Default::default(),
         }
     }

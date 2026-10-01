@@ -363,6 +363,16 @@ pub(super) fn classify_admin_basic_family_route(
             "admin:provider_strategy",
             false,
         ))
+    } else if matches!(method, &http::Method::GET | &http::Method::PUT)
+        && normalized_path.trim_end_matches('/') == "/api/admin/billing/pricing-groups"
+    {
+        Some(classified(
+            "admin_proxy",
+            "billing_manage",
+            "pricing_groups",
+            "admin:billing",
+            false,
+        ))
     } else if method == http::Method::GET
         && matches!(
             normalized_path,

@@ -588,7 +588,7 @@ fn invalid_processing_tier_error(
     ))
 }
 
-fn multiply_pricing_catalog(
+pub(crate) fn multiply_pricing_catalog(
     pricing: &Value,
     multiplier: f64,
     processing_tier: &str,

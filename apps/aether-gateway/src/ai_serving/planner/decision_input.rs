@@ -64,6 +64,7 @@ pub(crate) struct LocalRequestedModelDecisionInput {
     pub(crate) routing_policy: Option<ResolvedRoutingPolicy>,
     pub(crate) routing_trace_seed: Option<RoutingDecisionTrace>,
     pub(crate) routing_context: Option<LocalRoutingRequestContext>,
+    pub(crate) pricing_group: Option<aether_billing::groups::PricingGroup>,
     pub(crate) model_directive_policy: crate::system_features::ModelDirectivePolicySnapshot,
 }
 
@@ -123,6 +124,16 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision_with_websocket_m
     transport: Option<&GatewayProviderTransportSnapshot>,
     websocket_continuation: bool,
 ) -> Result<(), GatewayError> {
+    let report_context = decision
+        .report_context
+        .get_or_insert_with(|| serde_json::json!({}));
+    if let Some(context) = report_context.as_object_mut() {
+        context.insert(
+            aether_billing::groups::PRICING_GROUP_SNAPSHOT_KEY.to_string(),
+            serde_json::to_value(&input.pricing_group)
+                .map_err(|error| GatewayError::Internal(error.to_string()))?,
+        );
+    }
     let provider_api_format = decision
         .provider_api_format
         .clone()
@@ -514,6 +525,7 @@ pub(crate) fn build_local_requested_model_decision_input(
         routing_policy: None,
         routing_trace_seed: None,
         routing_context: None,
+        pricing_group: None,
         model_directive_policy: resolved_input.model_directive_policy,
     }
 }
@@ -525,6 +537,17 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
     body_json: &Value,
     client_api_format: &str,
 ) -> Result<(), GatewayError> {
+    input.pricing_group =
+        aether_billing::BillingModelContextLookup::find_pricing_group_for_api_key(
+            state.data.as_ref(),
+            Some(&input.auth_context.user_id),
+            Some(&input.auth_context.api_key_id),
+        )
+        .await
+        .map_err(|error| GatewayError::Client {
+            status: http::StatusCode::BAD_REQUEST,
+            message: error.to_string(),
+        })?;
     input.provider_outbound_context =
         Some(crate::ai_serving::codex_context::resolve_codex_fingerprint_context(parts, body_json));
     let explicit_group = routing_header_value_str(&parts.headers, ROUTING_GROUP_HEADER);
@@ -1419,6 +1442,7 @@ mod tests {
             routing_policy: None,
             routing_trace_seed: None,
             model_directive_policy: Default::default(),
+            pricing_group: None,
             routing_context: Some(LocalRoutingRequestContext {
                 group_id: Some("group-1".to_string()),
                 group_version: Some(3),
@@ -1668,6 +1692,7 @@ mod tests {
             routing_policy: None,
             routing_trace_seed: None,
             model_directive_policy: Default::default(),
+            pricing_group: None,
             routing_context: Some(LocalRoutingRequestContext {
                 group_id: Some("stale".to_string()),
                 group_version: Some(1),
@@ -1738,6 +1763,7 @@ mod tests {
             routing_policy: None,
             routing_trace_seed: None,
             routing_context: None,
+            pricing_group: None,
             model_directive_policy: Default::default(),
         };
         let group_config_json = json!({

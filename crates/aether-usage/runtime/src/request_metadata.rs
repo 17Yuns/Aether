@@ -112,6 +112,7 @@ pub(crate) fn retain_first_byte_request_metadata(value: Option<Value>) -> Option
                 | "model_id"
                 | "global_model_id"
                 | "global_model_name"
+                | "pricing_group"
         )
     });
     (!metadata.is_empty()).then_some(Value::Object(metadata))

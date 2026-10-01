@@ -3,6 +3,12 @@ import { createApp, nextTick, type App } from 'vue'
 
 import type { PublicGlobalModel } from '@/api/public-models'
 import UserModelDetailDrawer from '../components/UserModelDetailDrawer.vue'
+import ModelCatalog from '../ModelCatalog.vue'
+
+const pricingApiMock = vi.hoisted(() => ({ getVisible: vi.fn(), getAvailableModels: vi.fn() }))
+vi.mock('@/api/pricing-groups', () => ({ pricingGroupsApi: { getVisible: pricingApiMock.getVisible } }))
+vi.mock('@/api/me', () => ({ meApi: { getAvailableModels: pricingApiMock.getAvailableModels } }))
+vi.mock('@/composables/useToast', () => ({ useToast: () => ({ error: vi.fn() }) }))
 
 vi.mock('@/composables/useClipboard', () => ({
   useClipboard: () => ({
@@ -49,6 +55,39 @@ afterEach(() => {
 })
 
 describe('user model catalog detail drawer', () => {
+  it('requests prices for the selected group and renders the server prices without multiplying twice', async () => {
+    pricingApiMock.getVisible.mockResolvedValue({
+      enabled: true,
+      default_group_id: 'default',
+      groups: [
+        { id: 'default', name: '默认', multiplier: 1, is_visible: true },
+        { id: 'vip', name: 'VIP', multiplier: 0.5, is_visible: true },
+      ],
+    })
+    pricingApiMock.getAvailableModels.mockResolvedValue({ models: [model({
+      default_tiered_pricing: { tiers: [{ up_to: null, input_price_per_1m: 1.5, output_price_per_1m: 0 }] },
+    })], total: 1 })
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const app = createApp(ModelCatalog)
+    app.mount(root)
+    mountedApps.push({ app, root })
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await nextTick()
+    expect(pricingApiMock.getAvailableModels).toHaveBeenLastCalledWith({ limit: 1000, pricing_group_id: 'default' })
+    const selector = root.querySelector<HTMLSelectElement>('select[aria-label="定价分组"]')!
+    selector.value = 'vip'
+    selector.dispatchEvent(new Event('change', { bubbles: true }))
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await nextTick()
+    expect(pricingApiMock.getAvailableModels).toHaveBeenLastCalledWith({ limit: 1000, pricing_group_id: 'vip' })
+    expect(root.textContent).toContain('1.50')
+    expect(root.textContent).toContain('0.00')
+    expect(root.textContent).not.toContain('0.75')
+  })
+
   it('does not render model mapping fields for ordinary users', async () => {
     mountDrawer(model({
       config: {

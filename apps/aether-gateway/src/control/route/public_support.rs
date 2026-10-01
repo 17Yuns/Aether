@@ -595,6 +595,7 @@ pub(super) fn classify_public_support_route(
                 | "/api/users/me/usage/heatmap"
                 | "/api/users/me/providers"
                 | "/api/users/me/available-models"
+                | "/api/users/me/pricing-groups"
                 | "/api/users/me/client-config"
                 | "/api/users/me/endpoint-status"
                 | "/api/users/me/preferences"
@@ -612,6 +613,7 @@ pub(super) fn classify_public_support_route(
             "/api/users/me/usage/heatmap" => "usage_heatmap",
             "/api/users/me/providers" => "providers",
             "/api/users/me/available-models" => "available_models",
+            "/api/users/me/pricing-groups" => "pricing_groups",
             "/api/users/me/client-config" => "client_config",
             "/api/users/me/endpoint-status" => "endpoint_status",
             "/api/users/me/preferences" => "preferences",

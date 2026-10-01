@@ -46,6 +46,32 @@ pub fn sanitize_usage_request_metadata_ref(value: Option<&Value>) -> Option<Valu
 pub fn sanitize_usage_request_metadata_object(source: &Map<String, Value>) -> Option<Value> {
     let mut target = Map::new();
 
+    if let Some(group) = source.get("pricing_group") {
+        if group.is_null() {
+            target.insert("pricing_group".to_string(), Value::Null);
+        } else if let (Some(id), Some(name), Some(multiplier), Some(visible)) = (
+            group.get("id").and_then(Value::as_str),
+            group.get("name").and_then(Value::as_str),
+            group.get("multiplier").and_then(Value::as_f64),
+            group.get("is_visible").and_then(Value::as_bool),
+        ) {
+            if !id.trim().is_empty()
+                && id.len() <= 100
+                && !name.trim().is_empty()
+                && name.len() <= 200
+                && multiplier.is_finite()
+                && multiplier >= 0.0
+            {
+                target.insert(
+                    "pricing_group".to_string(),
+                    serde_json::json!({
+                        "id": id, "name": name, "multiplier": multiplier, "is_visible": visible,
+                    }),
+                );
+            }
+        }
+    }
+
     insert_token(source, &mut target, "trace_id", 128);
     insert_ip_address(source, &mut target, "client_ip");
     insert_client_family(source, &mut target);

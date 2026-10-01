@@ -144,6 +144,26 @@ async fn resolve_users_me_allowed_global_model_ids(
     ))
 }
 
+pub(super) async fn handle_users_me_pricing_groups(
+    state: &AppState,
+    context: &GatewayPublicRequestContext,
+    headers: &http::HeaderMap,
+) -> Response<Body> {
+    if let Err(response) = resolve_authenticated_local_user(state, context, headers).await {
+        return response;
+    }
+    match state.read_pricing_groups_config().await {
+        Ok(config) => Json(json!({ "enabled": config.enabled,
+            "default_group_id": config.default_group_id, "groups": config.visible_groups() }))
+        .into_response(),
+        Err(error) => build_auth_error_response(
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            error.into_message(),
+            false,
+        ),
+    }
+}
+
 pub(super) async fn handle_users_me_available_models(
     state: &AppState,
     request_context: &GatewayPublicRequestContext,
@@ -160,6 +180,33 @@ pub(super) async fn handle_users_me_available_models(
     let auth = match resolve_authenticated_local_user(state, request_context, headers).await {
         Ok(value) => value,
         Err(response) => return response,
+    };
+    let pricing_config = match state.read_pricing_groups_config().await {
+        Ok(config) => config,
+        Err(error) => {
+            return build_auth_error_response(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                error.into_message(),
+                false,
+            )
+        }
+    };
+    let selected_group_id = query_param_value(
+        request_context.request_query_string.as_deref(),
+        "pricing_group_id",
+    );
+    let group = match pricing_config.resolve(selected_group_id.as_deref()) {
+        Ok(Some(group)) if !group.is_visible => {
+            return build_auth_error_response(
+                http::StatusCode::FORBIDDEN,
+                "该定价分组不对用户开放",
+                false,
+            )
+        }
+        Ok(group) => group,
+        Err(error) => {
+            return build_auth_error_response(http::StatusCode::BAD_REQUEST, error, false)
+        }
     };
     let (skip, limit, search) =
         parse_users_me_available_models_query(request_context.request_query_string.as_deref());
@@ -286,13 +333,78 @@ pub(super) async fn handle_users_me_available_models(
         StoredPublicGlobalModelPage { items, total }
     };
 
+    let mut models = page
+        .items
+        .into_iter()
+        .map(|model| build_users_me_available_model_payload(model, hide_mapping_config))
+        .collect::<Vec<_>>();
+    if let Some(group) = &group {
+        for model in &mut models {
+            if let Some(video) = model
+                .get_mut("config")
+                .and_then(|config| config.get_mut("billing"))
+                .and_then(|billing| billing.get_mut("video"))
+            {
+                if let Some(prices) = video
+                    .get_mut("price_per_second_by_resolution")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    for price in prices.values_mut() {
+                        if let Some(value) = price.as_f64() {
+                            let value = value * group.multiplier;
+                            if !value.is_finite() || value < 0.0 {
+                                return build_auth_error_response(
+                                    http::StatusCode::SERVICE_UNAVAILABLE,
+                                    "分组价格无效",
+                                    false,
+                                );
+                            }
+                            *price = json!(value);
+                        }
+                    }
+                }
+                if let Some(price) = video.get_mut("price_per_second") {
+                    if let Some(value) = price.as_f64() {
+                        let value = value * group.multiplier;
+                        if !value.is_finite() || value < 0.0 {
+                            return build_auth_error_response(
+                                http::StatusCode::SERVICE_UNAVAILABLE,
+                                "分组价格无效",
+                                false,
+                            );
+                        }
+                        *price = json!(value);
+                    }
+                }
+            }
+            if let Some(price) = model["default_price_per_request"].as_f64() {
+                let price = price * group.multiplier;
+                if !price.is_finite() {
+                    return build_auth_error_response(
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        "分组价格无效",
+                        false,
+                    );
+                }
+                model["default_price_per_request"] = json!(price);
+            }
+            if !model["default_tiered_pricing"].is_null() {
+                let Some(pricing) = aether_billing::groups::scale_group_pricing(
+                    &model["default_tiered_pricing"],
+                    group.multiplier,
+                ) else {
+                    return build_auth_error_response(
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        "分组价格无效",
+                        false,
+                    );
+                };
+                model["default_tiered_pricing"] = pricing;
+            }
+        }
+    }
     Json(json!({
-        "models": page
-            .items
-            .into_iter()
-            .map(|model| build_users_me_available_model_payload(model, hide_mapping_config))
-            .collect::<Vec<_>>(),
-        "total": page.total,
+        "models": models, "total": page.total, "pricing_group": group,
     }))
     .into_response()
 }

@@ -20,6 +20,9 @@ const meApiMock = vi.hoisted(() => ({
   toggleApiKey: vi.fn(),
 }))
 
+const pricingGroupsMock = vi.hoisted(() => ({ getVisible: vi.fn() }))
+vi.mock('@/api/pricing-groups', () => ({ pricingGroupsApi: pricingGroupsMock }))
+
 vi.mock('@/api/me', () => ({
   meApi: meApiMock,
 }))
@@ -96,6 +99,7 @@ async function mountMyApiKeys() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  pricingGroupsMock.getVisible.mockResolvedValue({ enabled: false, default_group_id: 'default', groups: [] })
   meApiMock.getClientConfig.mockResolvedValue({
     base_url: 'https://aether.example.com',
     site_name: 'Aether Local',
@@ -131,6 +135,37 @@ afterEach(() => {
 })
 
 describe('MyApiKeys CC Switch import', () => {
+  it('sends the selected pricing group when creating a key', async () => {
+    pricingGroupsMock.getVisible.mockResolvedValue({
+      enabled: true,
+      default_group_id: 'default',
+      groups: [
+        { id: 'default', name: '默认', multiplier: 1, is_visible: true },
+        { id: 'vip', name: 'VIP', multiplier: 0.5, is_visible: true },
+      ],
+    })
+    meApiMock.getApiKeys.mockResolvedValue([])
+    meApiMock.createApiKey.mockResolvedValue(apiKey({ key: 'sk-created', pricing_group_id: 'vip' }))
+    await mountMyApiKeys()
+    document.querySelector<HTMLButtonElement>('[title="创建新 API Key"]')!.click()
+    await flushPromises()
+    const name = document.querySelector<HTMLInputElement>('#key-name')!
+    name.value = 'VIP key'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    const group = document.querySelector<HTMLSelectElement>('#key-pricing-group')!
+    expect(group.value).toBe('default')
+    group.value = 'vip'
+    group.dispatchEvent(new Event('change', { bubbles: true }))
+    await flushPromises()
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.trim() === '创建')!
+      .click()
+    await flushPromises()
+    expect(meApiMock.createApiKey).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'VIP key', pricing_group_id: 'vip',
+    }))
+  })
+
   it('opens the import dialog for an existing key without fetching the full key immediately', async () => {
     meApiMock.getApiKeys.mockResolvedValue([apiKey()])
 

@@ -12,6 +12,21 @@
 
           <!-- 右侧：操作区 -->
           <div class="flex flex-wrap items-center gap-2">
+            <select
+              v-if="pricingGroups.enabled"
+              v-model="selectedPricingGroup"
+              class="h-8 rounded-md border bg-background px-2 text-sm"
+              aria-label="定价分组"
+              @change="loadModels"
+            >
+              <option
+                v-for="group in pricingGroups.groups"
+                :key="group.id"
+                :value="group.id"
+              >
+                {{ group.name }} · {{ group.multiplier }}×
+              </option>
+            </select>
             <!-- 搜索框 -->
             <div class="relative">
               <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -104,7 +119,7 @@
                 <TableCell class="py-4 text-center">
                   <div class="text-xs space-y-0.5">
                     <!-- 按 Token 计费 -->
-                    <div v-if="getFirstTierPrice(model, 'input') || getFirstTierPrice(model, 'output')">
+                    <div v-if="getFirstTierPrice(model, 'input') !== null || getFirstTierPrice(model, 'output') !== null">
                       <span class="text-muted-foreground">In:</span>
                       <span class="font-mono ml-1">{{ getFirstTierPrice(model, 'input')?.toFixed(2) || '-' }}</span>
                       <span class="text-muted-foreground mx-1">/</span>
@@ -186,7 +201,7 @@
             <!-- 第二行：价格 + 调用次数 -->
             <div class="flex items-center gap-3 text-xs text-muted-foreground">
               <span
-                v-if="getFirstTierPrice(model, 'input') || getFirstTierPrice(model, 'output')"
+                v-if="getFirstTierPrice(model, 'input') !== null || getFirstTierPrice(model, 'output') !== null"
                 class="font-mono"
               >
                 In: ${{ getFirstTierPrice(model, 'input')?.toFixed(2) || '-' }} / Out: ${{ getFirstTierPrice(model, 'output')?.toFixed(2) || '-' }}
@@ -242,6 +257,7 @@ import {
 import { type PublicGlobalModel } from '@/api/public-models'
 import { formatUsageCount } from '@/utils/format'
 import { meApi } from '@/api/me'
+import { pricingGroupsApi, type PricingGroupsConfig } from '@/api/pricing-groups'
 import UserModelDetailDrawer from './components/UserModelDetailDrawer.vue'
 import { useRowClick } from '@/composables/useRowClick'
 import { log } from '@/utils/logger'
@@ -253,6 +269,9 @@ const { copyToClipboard } = useClipboard()
 
 // 状态
 const loading = ref(false)
+const pricingGroups = ref<PricingGroupsConfig>({ enabled: false, default_group_id: '', groups: [] })
+const selectedPricingGroup = ref('')
+let modelsLoadVersion = 0
 const searchQuery = ref('')
 const models = ref<PublicGlobalModel[]>([])
 
@@ -302,16 +321,18 @@ watch(searchQuery, () => {
 })
 
 async function loadModels() {
+  const version = ++modelsLoadVersion
   loading.value = true
+  drawerOpen.value = false
+  models.value = []
   try {
-    // 使用用户认证端点，只获取用户有权限使用的模型
-    const response = await meApi.getAvailableModels({ limit: 1000 })
-    models.value = (response.models || []) as PublicGlobalModel[]
+    const response = await meApi.getAvailableModels({ limit: 1000, ...(pricingGroups.value.enabled && selectedPricingGroup.value ? { pricing_group_id: selectedPricingGroup.value } : {}) })
+    if (version === modelsLoadVersion) models.value = (response.models || []) as PublicGlobalModel[]
   } catch (err: unknown) {
     log.error('加载模型失败:', err)
     showError(parseApiError(err, ''), '加载模型失败')
   } finally {
-    loading.value = false
+    if (version === modelsLoadVersion) loading.value = false
   }
 }
 
@@ -325,9 +346,9 @@ function getFirstTierPrice(model: PublicGlobalModel, type: 'input' | 'output'): 
   if (!tiered?.tiers?.length) return null
   const firstTier = tiered.tiers[0]
   if (type === 'input') {
-    return firstTier.input_price_per_1m || null
+    return firstTier.input_price_per_1m ?? null
   }
-  return firstTier.output_price_per_1m || null
+  return firstTier.output_price_per_1m ?? null
 }
 
 // 检测是否有阶梯计费（多于一个阶梯）
@@ -336,7 +357,13 @@ function hasTieredPricing(model: PublicGlobalModel): boolean {
   return (tiered?.tiers?.length || 0) > 1
 }
 
-onMounted(() => {
-  refreshData()
+onMounted(async () => {
+  try {
+    pricingGroups.value = await pricingGroupsApi.getVisible()
+    selectedPricingGroup.value = pricingGroups.value.default_group_id
+    await refreshData()
+  } catch (reason) {
+    showError(parseApiError(reason, '加载定价分组失败'))
+  }
 })
 </script>

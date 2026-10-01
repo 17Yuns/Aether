@@ -50,6 +50,14 @@
                   ? t('models.management.batchButtonSelected', { count: selectedBatchManageModelIds.size })
                   : t('models.management.batchButton') }}</span>
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-8"
+                @click="pricingGroupsDialogOpen = true"
+              >
+                分组定价
+              </Button>
               <ExternalModelsAccessControl />
               <Button
                 variant="ghost"
@@ -352,6 +360,8 @@
         />
       </Card>
     </div>
+
+    <PricingGroupsDialog v-model:open="pricingGroupsDialogOpen" />
 
     <!-- 创建/编辑模型对话框 -->
     <GlobalModelFormDialog
@@ -740,6 +750,7 @@ import {
   RefreshCw,
 } from 'lucide-vue-next'
 import ModelDetailDrawer from '@/features/models/components/ModelDetailDrawer.vue'
+import PricingGroupsDialog from '@/features/models/components/PricingGroupsDialog.vue'
 import GlobalModelFormDialog from '@/features/models/components/GlobalModelFormDialog.vue'
 import ExternalModelsAccessControl from '@/features/models/components/ExternalModelsAccessControl.vue'
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
@@ -838,6 +849,7 @@ const searchQuery = ref('')
 const selectedModel = ref<GlobalModelResponse | null>(null)
 const modelDetailDrawerRef = ref<InstanceType<typeof ModelDetailDrawer> | null>(null)
 const createModelDialogOpen = ref(false)
+const pricingGroupsDialogOpen = ref(false)
 const editingModel = ref<GlobalModelResponse | null>(null)
 
 // 数据
@@ -971,7 +983,7 @@ function getVideoPricingTooltip(model: GlobalModelResponse): string {
 
 // 检测是否有对话框打开（防止误关闭抽屉）
 const hasBlockingDialogOpen = computed(() =>
-  createModelDialogOpen.value ||
+  pricingGroupsDialogOpen.value || createModelDialogOpen.value ||
   batchAddProvidersDialogOpen.value ||
   editProviderDialogOpen.value ||
   batchManageDialogOpen.value

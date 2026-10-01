@@ -7756,7 +7756,17 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
             )
             .with_user_reader(user_repository)
             .with_provider_catalog_reader(provider_catalog_repository)
-            .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY);
+            .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY)
+            .with_system_config_values_for_tests([(
+                "pricing_groups".to_string(),
+                json!({
+                    "enabled": true, "default_group_id": "default", "groups": [
+                        {"id": "default", "name": "默认", "multiplier": 1, "is_visible": true},
+                        {"id": "vip", "name": "VIP", "multiplier": 0.5, "is_visible": true},
+                        {"id": "private", "name": "专属", "multiplier": 0.1, "is_visible": false}
+                    ]
+                }),
+            )]);
             AppState::new()
                 .expect("gateway should build")
                 .with_data_state_for_tests(data_state)
@@ -7778,6 +7788,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
         .header("user-agent", "AetherTest/1.0")
         .json(&json!({
             "name": "writer-key",
+            "pricing_group_id": "vip",
             "rate_limit": 120,
             "feature_settings": {
                 "chat_pii_redaction": {
@@ -7813,6 +7824,21 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
         true
     );
     assert_eq!(create_payload["message"], "API密钥创建成功");
+    assert_eq!(create_payload["pricing_group_id"], "vip");
+    assert_eq!(
+        create_payload["feature_settings"]["pricing_group_id"],
+        "vip"
+    );
+    let hidden_response = client
+        .post(format!("{gateway_url}/api/users/me/api-keys"))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-api-key-writes")
+        .header("user-agent", "AetherTest/1.0")
+        .json(&json!({"name": "hidden", "pricing_group_id": "private"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hidden_response.status(), StatusCode::BAD_REQUEST);
     let created_at = create_payload["created_at"]
         .as_str()
         .expect("created_at should be string");
@@ -7833,6 +7859,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
             "rate_limit": 30,
             "concurrent_limit": 4,
             "feature_settings": {
+                "pricing_group_id": "private",
                 "chat_pii_redaction": {
                     "enabled": false
                 }
@@ -7854,6 +7881,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
         false
     );
     assert_eq!(update_payload["message"], "API密钥已更新");
+    assert_eq!(update_payload["pricing_group_id"], "vip");
 
     let toggle_response = client
         .patch(format!("{gateway_url}/api/users/me/api-keys/{created_id}"))
@@ -12163,6 +12191,138 @@ async fn gateway_rejects_payment_callback_with_mismatched_payment_method_locally
     assert_eq!(detail_payload["order"]["refundable_amount_usd"], 0.0);
 
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_quotes_pricing_groups_and_hides_private_groups() {
+    let now = Utc::now();
+    let user = sample_auth_user(now);
+    let access_token = build_test_auth_token(
+        "access",
+        serde_json::Map::from_iter([
+            ("user_id".to_string(), json!(user.id)),
+            ("role".to_string(), json!(user.role)),
+            (
+                "created_at".to_string(),
+                json!(user.created_at.map(|value| value.to_rfc3339())),
+            ),
+            (
+                "session_id".to_string(),
+                json!("session-users-me-available-models"),
+            ),
+        ]),
+        now + chrono::Duration::hours(1),
+    );
+    let global_model_repository = Arc::new(
+        InMemoryGlobalModelReadRepository::seed(vec![
+            sample_public_global_model("gm-1", "gpt-5", "GPT 5", true),
+            sample_public_global_model("gm-2", "claude-sonnet-4-5", "Claude Sonnet 4.5", true),
+            sample_public_global_model("gm-3", "disabled-model", "Disabled Model", false),
+        ])
+        .with_active_global_model_refs(vec![
+            StoredProviderActiveGlobalModel::new("provider-openai".to_string(), "gm-1".to_string())
+                .expect("active global model ref should build"),
+            StoredProviderActiveGlobalModel::new("provider-claude".to_string(), "gm-2".to_string())
+                .expect("active global model ref should build"),
+        ]),
+    );
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![
+            sample_provider("provider-openai", "openai", 10),
+            sample_provider("provider-claude", "claude", 20),
+        ],
+        vec![],
+        vec![],
+    ));
+    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
+        start_auth_gateway_with_builder(|| {
+            let data_state = crate::data::GatewayDataState::with_global_model_reader_for_tests(
+                global_model_repository,
+            )
+            .with_provider_catalog_reader(provider_catalog_repository)
+            .with_user_reader(user_repository)
+            .with_system_config_values_for_tests([(
+                "pricing_groups".to_string(),
+                json!({
+                    "enabled": true, "default_group_id": "default", "groups": [
+                        {"id": "default", "name": "默认", "multiplier": 1, "is_visible": true},
+                        {"id": "vip", "name": "VIP", "multiplier": 0.5, "is_visible": true},
+                        {"id": "private", "name": "专属", "multiplier": 0.1, "is_visible": false}
+                    ]
+                }),
+            )]);
+            AppState::new()
+                .expect("gateway should build")
+                .with_data_state_for_tests(data_state)
+                .with_auth_sessions_for_tests([sample_auth_session(
+                    "user-auth-1",
+                    "session-users-me-available-models",
+                    "device-users-me-available-models",
+                    "refresh-token-placeholder",
+                    now,
+                )])
+        })
+        .await;
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/users/me/available-models?search=gpt&skip=0&limit=10&pricing_group_id=vip"
+        ))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-available-models")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    let models = payload["models"]
+        .as_array()
+        .expect("models should be an array");
+    assert_eq!(payload["total"], 1);
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["id"], "gm-1");
+    assert_eq!(models[0]["name"], "gpt-5");
+    assert_eq!(models[0]["display_name"], "GPT 5");
+    assert_eq!(payload["pricing_group"]["id"], "vip");
+    assert_eq!(
+        models[0]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        1.5
+    );
+    assert_eq!(models[0]["default_price_per_request"], 0.01);
+    let visible = reqwest::Client::new()
+        .get(format!("{gateway_url}/api/users/me/pricing-groups"))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-available-models")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(visible.status(), StatusCode::OK);
+    let visible: serde_json::Value = visible.json().await.unwrap();
+    assert_eq!(visible["groups"].as_array().unwrap().len(), 2);
+    for (group, status) in [
+        ("private", StatusCode::FORBIDDEN),
+        ("missing", StatusCode::BAD_REQUEST),
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{gateway_url}/api/users/me/available-models?pricing_group_id={group}"
+            ))
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("x-client-device-id", "device-users-me-available-models")
+            .header("user-agent", "AetherTest/1.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
     gateway_handle.abort();
     upstream_handle.abort();
 }

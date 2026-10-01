@@ -177,17 +177,6 @@
             </div>
             <div class="flex items-center gap-1">
               <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs text-muted-foreground"
-                :aria-label="`${activeProcessingTierLabel} 阶梯 ${index + 1} 切换缓存价格输入方式`"
-                @click="toggleCachePriceMode(index)"
-              >
-                <Repeat2 class="mr-1 h-3.5 w-3.5" />
-                {{ getCachePriceMode(index) === 'multiplier' ? '价格' : '倍率' }}
-              </Button>
-              <Button
                 v-if="localTiers.length > 1"
                 variant="ghost"
                 size="sm"
@@ -236,7 +225,7 @@
             </div>
             <div class="space-y-1">
               <Label class="text-xs text-muted-foreground">
-                {{ getCachePriceMode(index) === 'multiplier' ? '创建（倍率）' : '创建 ($/M)' }}
+                创建 ($/M)
               </Label>
               <div class="relative">
                 <Input
@@ -245,20 +234,15 @@
                   step="0.01"
                   min="0"
                   class="h-8"
-                  :class="getCachePriceMode(index) === 'multiplier' ? 'pr-7' : ''"
-                  :aria-label="`${activeProcessingTierLabel} 阶梯 ${index + 1} 缓存创建${getCachePriceMode(index) === 'multiplier' ? '倍率' : '价格'}`"
+                  :aria-label="`${activeProcessingTierLabel} 阶梯 ${index + 1} 缓存创建价格`"
                   placeholder="0"
                   @update:model-value="(v) => updateCacheCreation(index, v)"
                 />
-                <span
-                  v-if="getCachePriceMode(index) === 'multiplier'"
-                  class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"
-                >×</span>
               </div>
             </div>
             <div class="space-y-1">
               <Label class="text-xs text-muted-foreground">
-                {{ getCachePriceMode(index) === 'multiplier' ? '读取（倍率）' : '读取 ($/M)' }}
+                读取 ($/M)
               </Label>
               <div class="relative">
                 <Input
@@ -267,22 +251,17 @@
                   step="0.01"
                   min="0"
                   class="h-8"
-                  :class="getCachePriceMode(index) === 'multiplier' ? 'pr-7' : ''"
-                  :aria-label="`${activeProcessingTierLabel} 阶梯 ${index + 1} 缓存读取${getCachePriceMode(index) === 'multiplier' ? '倍率' : '价格'}`"
+                  :aria-label="`${activeProcessingTierLabel} 阶梯 ${index + 1} 缓存读取价格`"
                   placeholder="0"
                   @update:model-value="(v) => updateCacheRead(index, v)"
                 />
-                <span
-                  v-if="getCachePriceMode(index) === 'multiplier'"
-                  class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"
-                >×</span>
               </div>
             </div>
             <div
               v-if="showCache1h"
               class="space-y-1"
             >
-              <Label class="text-xs text-muted-foreground">1h 缓存</Label>
+              <Label class="text-xs text-muted-foreground">1h 缓存创建 ($/M)</Label>
               <Input
                 :model-value="getCache1hDisplay(index)"
                 type="number"
@@ -571,7 +550,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, reactive } from 'vue'
-import { Plus, Repeat2, Trash2, X } from 'lucide-vue-next'
+import { Plus, Trash2, X } from 'lucide-vue-next'
 import { Button, Checkbox, Input, Label } from '@/components/ui'
 import { formatTokens } from '@/utils/format'
 import type {
@@ -581,10 +560,6 @@ import type {
   ProcessingTierPricingConfig,
   TieredPricingConfig,
 } from '@/api/endpoints/types'
-import {
-  cacheMultiplierFromPrice,
-  cachePriceFromInputMultiplier,
-} from '@/features/models/utils/tiered-pricing-multipliers'
 import { comparePricingUpperBounds } from '@/features/models/utils/tiered-pricing'
 
 type ImageOutputQuality = 'low' | 'medium' | 'high'
@@ -610,8 +585,6 @@ type ImagePricingState = {
   defaultPrice: string
 }
 type CacheManualState = { creation: boolean; read: boolean; cache1h: boolean }
-type CachePriceMode = 'multiplier' | 'price'
-type CacheMultiplierDraft = { creation: string; read: string }
 type ProcessingTierOption = {
   scope: string
   key: string
@@ -693,8 +666,6 @@ let imageOutputPriceRangeRowId = 0
 
 // 跟踪每个阶梯的缓存价格是否被手动设置
 const cacheManualStateByScope = reactive<Record<string, Record<number, CacheManualState>>>({})
-const cachePriceModesByScope = reactive<Record<string, Record<number, CachePriceMode>>>({})
-const cacheMultiplierDraftsByScope = reactive<Record<string, Record<number, CacheMultiplierDraft>>>({})
 const imagePricingStateByScope = reactive<Record<string, ImagePricingState>>({})
 const processingTierMultiplierDrafts = reactive<Record<string, ProcessingTierMultiplierDraft>>(
   Object.create(null) as Record<string, ProcessingTierMultiplierDraft>,
@@ -797,8 +768,6 @@ const localTiers = computed<PricingTier[]>({
   },
 })
 const cacheManuallySet = computed(() => cacheManualStateByScope[activePricingScope.value])
-const cachePriceModes = computed(() => cachePriceModesByScope[activePricingScope.value])
-const cacheMultiplierDrafts = computed(() => cacheMultiplierDraftsByScope[activePricingScope.value])
 const imageOutputPriceRows = computed<ImageOutputPriceRow[]>({
   get: () => imagePricingStateByScope[activePricingScope.value]?.rows ?? [],
   set: rows => setActiveImagePricingState({ rows }),
@@ -974,8 +943,6 @@ function initializeProcessingTierMultiplierDrafts() {
 
 function resetScopeState() {
   for (const scope of Object.keys(cacheManualStateByScope)) delete cacheManualStateByScope[scope]
-  for (const scope of Object.keys(cachePriceModesByScope)) delete cachePriceModesByScope[scope]
-  for (const scope of Object.keys(cacheMultiplierDraftsByScope)) delete cacheMultiplierDraftsByScope[scope]
   for (const scope of Object.keys(imagePricingStateByScope)) delete imagePricingStateByScope[scope]
   for (const key of Object.keys(processingTierMultiplierDrafts)) delete processingTierMultiplierDrafts[key]
   resetCustomThresholdState()
@@ -995,120 +962,26 @@ function initializeScopeCacheState(scope: string, tiers: PricingTier[]) {
       cache1h: tier.cache_ttl_pricing?.some(price => price.ttl_minutes === 60) ?? false,
     },
   ]))
-  cachePriceModesByScope[scope] = Object.fromEntries(tiers.map((_, index) => [
-    index,
-    'multiplier' as CachePriceMode,
-  ]))
-  cacheMultiplierDraftsByScope[scope] = Object.fromEntries(tiers.map((tier, index) => [
-    index,
-    createCacheMultiplierDraft(tier),
-  ]))
-}
-
-function createCacheMultiplierDraft(tier: PricingTier): CacheMultiplierDraft {
-  return {
-    creation: createCacheMultiplierDraftValue(
-      tier.input_price_per_1m,
-      tier.cache_creation_price_per_1m,
-      1.25,
-    ),
-    read: createCacheMultiplierDraftValue(
-      tier.input_price_per_1m,
-      tier.cache_read_price_per_1m,
-      0.1,
-    ),
-  }
-}
-
-function createCacheMultiplierDraftValue(
-  inputPrice: number,
-  cachePrice: number | undefined,
-  fallback: number,
-): string {
-  if (cachePrice == null && !props.autoFillMissingCachePrices) return ''
-  return String(cacheMultiplierFromPrice(inputPrice, cachePrice, fallback))
-}
-
-function getCachePriceMode(index: number): CachePriceMode {
-  return cachePriceModes.value?.[index] ?? 'multiplier'
-}
-
-function getCacheMultiplierDraft(index: number): CacheMultiplierDraft {
-  const drafts = cacheMultiplierDrafts.value
-  if (!drafts) {
-    throw new Error(`Missing cache multiplier state for pricing scope: ${activePricingScope.value}`)
-  }
-  if (!drafts[index]) drafts[index] = createCacheMultiplierDraft(localTiers.value[index])
-  return drafts[index]
-}
-
-function toggleCachePriceMode(index: number) {
-  const tier = localTiers.value[index]
-  const modes = cachePriceModes.value
-  const drafts = cacheMultiplierDrafts.value
-  const manualState = requireActiveCacheManualState()
-  if (!tier || !modes || !drafts) return
-  if (getCachePriceMode(index) === 'multiplier') {
-    if (props.autoFillMissingCachePrices || manualState[index]?.creation) {
-      tier.cache_creation_price_per_1m = getResolvedCacheCreationPrice(index)
-    } else {
-      delete tier.cache_creation_price_per_1m
-    }
-    if (props.autoFillMissingCachePrices || manualState[index]?.read) {
-      tier.cache_read_price_per_1m = getResolvedCacheReadPrice(index)
-    } else {
-      delete tier.cache_read_price_per_1m
-    }
-    modes[index] = 'price'
-  } else {
-    drafts[index] = createCacheMultiplierDraft(tier)
-    modes[index] = 'multiplier'
-  }
-  syncToParent()
-}
-
-function getResolvedCacheCreationPrice(index: number): number {
-  const tier = localTiers.value[index]
-  if (!tier) return 0
-  return resolveCachePriceForScope(activePricingScope.value, index, tier, 'creation')
-}
-
-function getResolvedCacheReadPrice(index: number): number {
-  const tier = localTiers.value[index]
-  if (!tier) return 0
-  return resolveCachePriceForScope(activePricingScope.value, index, tier, 'read')
 }
 
 function resolveCachePriceForScope(
-  scope: string,
-  index: number,
   tier: PricingTier,
   kind: 'creation' | 'read',
 ): number {
-  const mode = cachePriceModesByScope[scope]?.[index] ?? 'multiplier'
-  if (mode === 'price') {
-    return kind === 'creation'
-      ? tier.cache_creation_price_per_1m ?? 0
-      : tier.cache_read_price_per_1m ?? 0
-  }
-  const draft = cacheMultiplierDraftsByScope[scope]?.[index]
-    ?? createCacheMultiplierDraft(tier)
-  return cachePriceFromInputMultiplier(
-    tier.input_price_per_1m,
-    parseFloatInput(draft[kind]),
-  )
+  const price = kind === 'creation'
+    ? tier.cache_creation_price_per_1m
+    : tier.cache_read_price_per_1m
+  return price ?? (props.autoFillMissingCachePrices
+    ? automaticCachePrice(tier, kind === 'creation' ? 1.25 : 0.1)
+    : 0)
 }
 
 function getCacheCreationEditorValue(index: number): string | number {
-  return getCachePriceMode(index) === 'multiplier'
-    ? getCacheMultiplierDraft(index).creation
-    : localTiers.value[index]?.cache_creation_price_per_1m ?? ''
+  return localTiers.value[index]?.cache_creation_price_per_1m ?? ''
 }
 
 function getCacheReadEditorValue(index: number): string | number {
-  return getCachePriceMode(index) === 'multiplier'
-    ? getCacheMultiplierDraft(index).read
-    : localTiers.value[index]?.cache_read_price_per_1m ?? ''
+  return localTiers.value[index]?.cache_read_price_per_1m ?? ''
 }
 
 function initializeScopeImagePricingState(scope: string, config: ImagePricingConfig) {
@@ -1265,8 +1138,6 @@ function removeActiveProcessingTier() {
     Object.entries(processingTierConfigs.value).filter(([existingKey]) => existingKey !== key),
   )
   delete cacheManualStateByScope[activePricingScope.value]
-  delete cachePriceModesByScope[activePricingScope.value]
-  delete cacheMultiplierDraftsByScope[activePricingScope.value]
   delete imagePricingStateByScope[activePricingScope.value]
   processingTierKeysEdited.value = true
   const draft = requireProcessingTierMultiplierDraft(key)
@@ -1511,6 +1382,7 @@ function getAutoCache1h(index: number): number {
 }
 
 function getCache1hPlaceholder(index: number): string {
+  if (!props.autoFillMissingCachePrices) return '0'
   const auto = getAutoCache1h(index)
   return auto > 0 ? String(auto) : '自动'
 }
@@ -1521,8 +1393,7 @@ function getCache1hDisplay(index: number): string | number {
   if (cacheManuallySet.value[index]?.cache1h) {
     const ttl1h = tier?.cache_ttl_pricing?.find(t => t.ttl_minutes === 60)
     if (ttl1h) {
-      // 修复浮点数精度问题
-      return parseFloat(ttl1h.cache_creation_price_per_1m.toFixed(4))
+      return ttl1h.cache_creation_price_per_1m
     }
   }
   return ''
@@ -1633,8 +1504,6 @@ function buildTiersForScope(scope: string, includeAutomaticCache: boolean): Pric
 
     if (props.autoFillMissingCachePrices || state?.creation) {
       tier.cache_creation_price_per_1m = resolveCachePriceForScope(
-        scope,
-        index,
         sourceTier,
         'creation',
       )
@@ -1643,8 +1512,6 @@ function buildTiersForScope(scope: string, includeAutomaticCache: boolean): Pric
     }
     if (props.autoFillMissingCachePrices || state?.read) {
       tier.cache_read_price_per_1m = resolveCachePriceForScope(
-        scope,
-        index,
         sourceTier,
         'read',
       )
@@ -1655,7 +1522,7 @@ function buildTiersForScope(scope: string, includeAutomaticCache: boolean): Pric
     if (props.showCache1h) {
       if (state?.cache1h && sourceTier.cache_ttl_pricing?.length) {
         tier.cache_ttl_pricing = cloneJson(sourceTier.cache_ttl_pricing)
-      } else if (includeAutomaticCache) {
+      } else if (includeAutomaticCache && props.autoFillMissingCachePrices) {
         tier.cache_ttl_pricing = replaceCacheTtlPrice(
           sourceTier.cache_ttl_pricing,
           60,
@@ -1897,7 +1764,7 @@ function parseFloatInput(value: string | number): number {
   return isNaN(num) ? 0 : num
 }
 
-// 更新输入价格（会触发缓存价格自动更新）
+// 输入价格与显式缓存单价独立保存
 function updateInputPrice(index: number, value: number) {
   localTiers.value[index].input_price_per_1m = value
   syncToParent()
@@ -1945,14 +1812,10 @@ function updateCacheCreation(index: number, value: string | number) {
   const manualState = requireActiveCacheManualState()
   const hasValue = value !== '' && value !== null && value !== undefined
   manualState[index] = { ...manualState[index], creation: hasValue }
-  if (getCachePriceMode(index) === 'multiplier') {
-    getCacheMultiplierDraft(index).creation = String(value ?? '')
+  if (hasValue) {
+    localTiers.value[index].cache_creation_price_per_1m = parseFloatInput(value)
   } else {
-    if (hasValue) {
-      localTiers.value[index].cache_creation_price_per_1m = parseFloatInput(value)
-    } else {
-      delete localTiers.value[index].cache_creation_price_per_1m
-    }
+    delete localTiers.value[index].cache_creation_price_per_1m
   }
   syncToParent()
 }
@@ -1961,14 +1824,10 @@ function updateCacheRead(index: number, value: string | number) {
   const manualState = requireActiveCacheManualState()
   const hasValue = value !== '' && value !== null && value !== undefined
   manualState[index] = { ...manualState[index], read: hasValue }
-  if (getCachePriceMode(index) === 'multiplier') {
-    getCacheMultiplierDraft(index).read = String(value ?? '')
+  if (hasValue) {
+    localTiers.value[index].cache_read_price_per_1m = parseFloatInput(value)
   } else {
-    if (hasValue) {
-      localTiers.value[index].cache_read_price_per_1m = parseFloatInput(value)
-    } else {
-      delete localTiers.value[index].cache_read_price_per_1m
-    }
+    delete localTiers.value[index].cache_read_price_per_1m
   }
   syncToParent()
 }
@@ -1992,11 +1851,6 @@ function updateCache1h(index: number, value: string | number) {
 // 阶梯操作
 function addTier() {
   const manualState = requireActiveCacheManualState()
-  const modes = cachePriceModes.value
-  const drafts = cacheMultiplierDrafts.value
-  if (!modes || !drafts) {
-    throw new Error(`Missing cache editor state for pricing scope: ${activePricingScope.value}`)
-  }
   if (localTiers.value.length === 0) {
     localTiers.value = [{
       up_to: null,
@@ -2004,8 +1858,6 @@ function addTier() {
       output_price_per_1m: 0,
     }]
     manualState[0] = { creation: false, read: false, cache1h: false }
-    modes[0] = 'multiplier'
-    drafts[0] = createCacheMultiplierDraft(localTiers.value[0])
   } else {
     const lastTier = localTiers.value[localTiers.value.length - 1]
     if (lastTier.up_to === null) {
@@ -2025,8 +1877,6 @@ function addTier() {
 
     localTiers.value.push(newTier)
     manualState[newIndex] = { creation: false, read: false, cache1h: false }
-    modes[newIndex] = 'multiplier'
-    drafts[newIndex] = createCacheMultiplierDraft(newTier)
   }
 
   syncToParent()
@@ -2036,12 +1886,6 @@ function removeTier(index: number) {
   if (localTiers.value.length <= 1) return
   const manualState = requireActiveCacheManualState()
   const previousManualState = { ...manualState }
-  const previousModes = localTiers.value.map((_, tierIndex) => getCachePriceMode(tierIndex))
-  const previousDrafts = localTiers.value.map((tier, tierIndex) => (
-    cacheMultiplierDrafts.value?.[tierIndex] ?? createCacheMultiplierDraft(tier)
-  ))
-  previousModes.splice(index, 1)
-  previousDrafts.splice(index, 1)
   localTiers.value.splice(index, 1)
 
   // 重新整理 cacheManuallySet 的索引
@@ -2053,18 +1897,6 @@ function removeTier(index: number) {
   })
   Object.keys(manualState).forEach(k => delete manualState[Number(k)])
   Object.assign(manualState, newManuallySet)
-
-  const modes = cachePriceModes.value
-  const drafts = cacheMultiplierDrafts.value
-  if (!modes || !drafts) {
-    throw new Error(`Missing cache editor state for pricing scope: ${activePricingScope.value}`)
-  }
-  for (const key of Object.keys(modes)) delete modes[Number(key)]
-  for (const key of Object.keys(drafts)) delete drafts[Number(key)]
-  localTiers.value.forEach((tier, tierIndex) => {
-    modes[tierIndex] = previousModes[tierIndex] ?? 'multiplier'
-    drafts[tierIndex] = previousDrafts[tierIndex] ?? createCacheMultiplierDraft(tier)
-  })
 
   if (
     localTiers.value.length > 0

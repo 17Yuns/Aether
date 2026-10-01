@@ -345,6 +345,7 @@ pub(crate) fn admin_proxy_local_requires_buffered_body(
                 | (Some("billing_manage"), http::Method::PUT, Some("update_rule"))
                 | (Some("billing_manage"), http::Method::POST, Some("create_collector"))
                 | (Some("billing_manage"), http::Method::PUT, Some("update_collector"))
+                | (Some("billing_manage"), http::Method::PUT, Some("pricing_groups"))
                 | (Some("billing_manage"), http::Method::POST, Some("create_plan"))
                 | (Some("billing_manage"), http::Method::PUT, Some("update_plan"))
                 | (Some("billing_manage"), http::Method::PATCH, Some("set_plan_status"))

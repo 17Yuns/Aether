@@ -986,6 +986,7 @@ function openEditUserApiKeyDialog(apiKey: ApiKey) {
   editingUserApiKey.value = apiKey
   userApiKeyForm.value = {
     name: apiKey.name || '',
+    pricing_group_id: typeof apiKey.feature_settings?.pricing_group_id === 'string' ? apiKey.feature_settings.pricing_group_id : null,
     rate_limit: apiKey.rate_limit ?? undefined,
     concurrent_limit: apiKey.concurrent_limit ?? undefined,
     ip_rules_text: apiKey.ip_rules?.join(', ') ?? '',
@@ -1043,6 +1044,12 @@ async function submitUserApiKeyForm() {
         inject_model_instruction: form.chat_pii_redaction_placeholder_notice,
       },
     })
+    if (form.pricing_group_id) {
+      featureSettingsPatch.feature_settings = {
+        ...('feature_settings' in featureSettingsPatch ? featureSettingsPatch.feature_settings ?? {} : editingApiKey?.feature_settings ?? {}),
+        pricing_group_id: form.pricing_group_id,
+      }
+    }
     if (editingApiKey) {
       await usersStore.updateApiKey(targetUserId, editingApiKey.id, {
         name: form.name,

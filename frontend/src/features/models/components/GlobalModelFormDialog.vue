@@ -641,7 +641,7 @@
                 ref="tieredPricingEditorRef"
                 v-model="tieredPricing"
                 class="mt-3"
-                :auto-fill-missing-cache-prices="autoFillMissingCachePrices"
+                :auto-fill-missing-cache-prices="false"
                 :show-token-pricing="billingMode === 'token'"
                 :show-image-pricing="isImageGenerationEnabled"
                 :show-image-editor="billingMode === 'image'"
@@ -1798,10 +1798,6 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
   extraLoadingStates: [syncingOnlinePricing],
 })
-
-const autoFillMissingCachePrices = computed(() => (
-  !isEditMode.value && selectedModel.value === null
-))
 
 async function handleSubmit() {
   if (syncingOnlinePricing.value) return

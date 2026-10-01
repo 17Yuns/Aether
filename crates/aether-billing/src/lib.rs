@@ -1,6 +1,7 @@
 mod default_rule;
 mod event_enrichment;
 mod formula_engine;
+pub mod groups;
 mod models;
 mod precision;
 mod pricing;

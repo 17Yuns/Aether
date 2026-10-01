@@ -177,6 +177,7 @@ fn classifies_admin_billing_plan_routes_as_admin_proxy_route() {
 fn admin_billing_plan_write_routes_buffer_request_body() {
     let headers = headers(&[]);
     let routes = [
+        (http::Method::PUT, "/api/admin/billing/pricing-groups"),
         (http::Method::POST, "/api/admin/billing/plans"),
         (http::Method::PUT, "/api/admin/billing/plans/plan-1"),
         (

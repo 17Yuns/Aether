@@ -12,6 +12,7 @@ mod core;
 mod cors;
 mod integrations;
 mod oauth;
+mod pricing_groups;
 mod proxy;
 mod routing_profiles;
 mod runtime;

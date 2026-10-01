@@ -4,6 +4,15 @@ use crate::handlers::admin::request::{AdminRouteRequest, AdminRouteResult};
 pub(crate) async fn maybe_build_local_admin_billing_routes_response(
     request: AdminRouteRequest<'_>,
 ) -> AdminRouteResult {
+    if let Some(response) = super::pricing_groups::maybe_build_pricing_groups_response(
+        &request.state(),
+        &request.request_context(),
+        request.request_body(),
+    )
+    .await?
+    {
+        return Ok(Some(response));
+    }
     if let Some(response) = maybe_build_local_admin_billing_response(
         &request.state(),
         &request.request_context(),

@@ -561,7 +561,7 @@ describe('TieredPricingEditor processing tiers', () => {
     expect(result.processing_tiers?.batch.tiers?.[0].input_price_per_1m).toBe(13)
   })
 
-  it('keeps cache multiplier drafts isolated by processing scope', async () => {
+  it('keeps directly entered cache prices isolated by processing scope', async () => {
     const pricing = {
       tiers: [{ up_to: null, input_price_per_1m: 5, output_price_per_1m: 30 }],
       processing_tiers: {
@@ -575,9 +575,9 @@ describe('TieredPricingEditor processing tiers', () => {
     click(root.querySelector('[data-processing-tier="priority"]'))
     await nextTick()
     const multiplier = root.querySelector(
-      'input[aria-label="Fast（OpenAI） 阶梯 1 缓存创建倍率"]',
+      'input[aria-label="Fast（OpenAI） 阶梯 1 缓存创建价格"]',
     ) as HTMLInputElement
-    multiplier.value = '2'
+    multiplier.value = '20'
     multiplier.dispatchEvent(new Event('input', { bubbles: true }))
     await nextTick()
 
@@ -595,10 +595,10 @@ describe('TieredPricingEditor processing tiers', () => {
     })
 
     const creation = root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存创建倍率"]',
+      'input[aria-label="Standard 阶梯 1 缓存创建价格"]',
     ) as HTMLInputElement
     const read = root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存读取倍率"]',
+      'input[aria-label="Standard 阶梯 1 缓存读取价格"]',
     ) as HTMLInputElement
 
     expect(creation.value).toBe('')
@@ -630,14 +630,14 @@ describe('TieredPricingEditor processing tiers', () => {
     })
 
     const creationValues = [...root.querySelectorAll<HTMLInputElement>(
-      'input[aria-label*="缓存创建倍率"]',
+      'input[aria-label*="缓存创建价格"]',
     )].map(input => input.value)
     const readValues = [...root.querySelectorAll<HTMLInputElement>(
-      'input[aria-label*="缓存读取倍率"]',
+      'input[aria-label*="缓存读取价格"]',
     )].map(input => input.value)
 
-    expect(creationValues).toEqual(['1.25', ''])
-    expect(readValues).toEqual(['', '0.1'])
+    expect(creationValues).toEqual(['6.25', ''])
+    expect(readValues).toEqual(['', '0.7'])
     expect(getFinalPricing().tiers).toEqual(pricing.tiers)
   })
 
@@ -649,7 +649,7 @@ describe('TieredPricingEditor processing tiers', () => {
       autoFillMissingCachePrices: false,
     })
     const read = root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存读取倍率"]',
+      'input[aria-label="Standard 阶梯 1 缓存读取价格"]',
     ) as HTMLInputElement
 
     read.value = '0.2'
@@ -660,7 +660,7 @@ describe('TieredPricingEditor processing tiers', () => {
       up_to: null,
       input_price_per_1m: 5,
       output_price_per_1m: 30,
-      cache_read_price_per_1m: 1,
+      cache_read_price_per_1m: 0.2,
     }])
 
     read.value = ''
@@ -674,25 +674,44 @@ describe('TieredPricingEditor processing tiers', () => {
     }])
   })
 
-  it('does not turn absent cache prices into zero when switching editor modes', async () => {
+  it('keeps explicit cache prices independent of changes to the input price', async () => {
     const pricing = {
-      tiers: [{ up_to: null, input_price_per_1m: 5, output_price_per_1m: 30 }],
+      tiers: [{
+        up_to: null,
+        input_price_per_1m: 5,
+        output_price_per_1m: 30,
+        cache_creation_price_per_1m: 0,
+        cache_read_price_per_1m: 0.000001,
+        cache_ttl_pricing: [{ ttl_minutes: 60, cache_creation_price_per_1m: 0.000002 }],
+      }],
     } as TieredPricingConfig
-    const { root, getFinalPricing } = mountEditor(pricing, {
-      autoFillMissingCachePrices: false,
-    })
-
-    click(root.querySelector(
-      'button[aria-label="Standard 阶梯 1 切换缓存价格输入方式"]',
-    ))
+    const { root, getFinalPricing } = mountEditor(pricing, { showCache1h: true })
+    const input = root.querySelector('[data-testid="tier-input-price"]') as HTMLInputElement
+    input.value = '100'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
     await nextTick()
 
-    expect((root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存创建价格"]',
-    ) as HTMLInputElement).value).toBe('')
-    expect((root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存读取价格"]',
-    ) as HTMLInputElement).value).toBe('')
+    expect(getFinalPricing().tiers[0]).toEqual({
+      ...pricing.tiers[0],
+      input_price_per_1m: 100,
+    })
+    expect((root.querySelector('input[aria-label="Standard 阶梯 1 一小时缓存价格"]') as HTMLInputElement).value)
+      .toBe('0.000002')
+  })
+
+  it('leaves missing one-hour cache prices unset when automatic prices are disabled', () => {
+    const pricing = {
+      tiers: [{
+        up_to: null,
+        input_price_per_1m: 5,
+        output_price_per_1m: 30,
+        cache_ttl_pricing: [{ ttl_minutes: 5, cache_creation_price_per_1m: 7 }],
+      }],
+    } as TieredPricingConfig
+    const { getFinalPricing } = mountEditor(pricing, {
+      showCache1h: true,
+      autoFillMissingCachePrices: false,
+    })
     expect(getFinalPricing().tiers).toEqual(pricing.tiers)
   })
 
@@ -704,7 +723,7 @@ describe('TieredPricingEditor processing tiers', () => {
       autoFillMissingCachePrices: false,
     })
     const read = root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存读取倍率"]',
+      'input[aria-label="Standard 阶梯 1 缓存读取价格"]',
     ) as HTMLInputElement
 
     read.value = '0.2'
@@ -724,7 +743,7 @@ describe('TieredPricingEditor processing tiers', () => {
     expect((root.querySelector('[data-testid="tier-input-price"]') as HTMLInputElement).value)
       .toBe('5')
     expect((root.querySelector(
-      'input[aria-label="Standard 阶梯 1 缓存读取倍率"]',
+      'input[aria-label="Standard 阶梯 1 缓存读取价格"]',
     ) as HTMLInputElement).value).toBe('0.2')
   })
 

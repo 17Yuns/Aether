@@ -43,6 +43,8 @@ struct UsersMeCreateApiKeyRequest {
     concurrent_limit: Option<i32>,
     #[serde(default)]
     feature_settings: Option<serde_json::Value>,
+    #[serde(default)]
+    pricing_group_id: Option<String>,
     #[serde(default, alias = "allowed_ips")]
     ip_rules: Option<Vec<String>>,
 }
@@ -57,6 +59,8 @@ struct UsersMeUpdateApiKeyRequest {
     concurrent_limit: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_optional_json_patch")]
     feature_settings: Option<Option<serde_json::Value>>,
+    #[serde(default, deserialize_with = "deserialize_optional_json_patch")]
+    pricing_group_id: Option<Option<serde_json::Value>>,
     #[serde(
         default,
         alias = "allowed_ips",
@@ -187,6 +191,7 @@ fn build_users_me_api_key_list_payload(
         "ip_rules": record.ip_rules,
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
+        "pricing_group_id": record.feature_settings.as_ref().and_then(|settings| settings.get("pricing_group_id")),
     })
 }
 
@@ -205,6 +210,7 @@ fn build_users_me_api_key_detail_payload(
         "ip_rules": record.ip_rules,
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
+        "pricing_group_id": record.feature_settings.as_ref().and_then(|settings| settings.get("pricing_group_id")),
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(record.last_used_at_unix_secs),
@@ -573,6 +579,28 @@ pub(super) async fn handle_users_me_api_key_create(
             return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
         }
     };
+    let config = match state.read_pricing_groups_config().await {
+        Ok(config) => config,
+        Err(error) => {
+            return build_auth_error_response(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                error.into_message(),
+                false,
+            )
+        }
+    };
+    let feature_settings = match aether_billing::groups::user_key_group_settings(
+        &config,
+        feature_settings,
+        payload.pricing_group_id.as_deref().map(Some),
+        None,
+        true,
+    ) {
+        Ok(settings) => settings,
+        Err(error) => {
+            return build_auth_error_response(http::StatusCode::BAD_REQUEST, error, false)
+        }
+    };
     let ip_rules = match normalize_users_me_ip_rules(payload.ip_rules) {
         Ok(value) => value,
         Err(detail) => {
@@ -643,6 +671,7 @@ pub(super) async fn handle_users_me_api_key_create(
             "concurrent_limit": created.concurrent_limit,
             "ip_rules": created.ip_rules,
             "feature_settings": created.feature_settings,
+            "pricing_group_id": created.feature_settings.as_ref().and_then(|settings| settings.get("pricing_group_id")),
             "last_used_at": format_users_me_optional_unix_secs_iso8601(created.last_used_at_unix_secs),
             "created_at": format_users_me_optional_unix_secs_iso8601(created.created_at_unix_secs),
             "total_requests": created.total_requests,
@@ -723,6 +752,61 @@ pub(super) async fn handle_users_me_api_key_update(
             }
         },
         None => None,
+    };
+    let feature_settings = if feature_settings.is_some() || payload.pricing_group_id.is_some() {
+        let existing = match state
+            .data
+            .read_auth_api_key_feature_settings(&auth.user.id, &snapshot.api_key_id, false)
+            .await
+        {
+            Ok(settings) => settings,
+            Err(error) => {
+                return build_auth_error_response(
+                    http::StatusCode::SERVICE_UNAVAILABLE,
+                    error.to_string(),
+                    false,
+                )
+            }
+        };
+        let config = match state.read_pricing_groups_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                return build_auth_error_response(
+                    http::StatusCode::SERVICE_UNAVAILABLE,
+                    error.into_message(),
+                    false,
+                )
+            }
+        };
+        let selection = match payload.pricing_group_id.as_ref() {
+            Some(Some(value)) => match value.as_str() {
+                Some(value) => Some(Some(value)),
+                None => {
+                    return build_auth_error_response(
+                        http::StatusCode::BAD_REQUEST,
+                        "pricing_group_id 必须为字符串",
+                        false,
+                    )
+                }
+            },
+            Some(None) => Some(None),
+            None => None,
+        };
+        let settings = feature_settings.unwrap_or_else(|| existing.clone());
+        match aether_billing::groups::user_key_group_settings(
+            &config,
+            settings,
+            selection,
+            existing.as_ref(),
+            false,
+        ) {
+            Ok(settings) => Some(settings),
+            Err(error) => {
+                return build_auth_error_response(http::StatusCode::BAD_REQUEST, error, false)
+            }
+        }
+    } else {
+        None
     };
     let ip_rules = match payload.ip_rules {
         Some(value) => match normalize_users_me_ip_rules(value) {
