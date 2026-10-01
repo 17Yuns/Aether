@@ -150,7 +150,7 @@ pub(crate) async fn maybe_build_stream_local_standard_decision_payload(
 #[cfg(test)]
 mod tests {
     use super::build_standard_request_body;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn builds_openai_chat_request_from_claude_chat_source() {
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn strips_metadata_for_codex_openai_responses_requests() {
-        let request = json!({
+        let base_request = json!({
             "model": "claude-sonnet-4-5",
             "metadata": {"trace_id": "abc"},
             "messages": [{
@@ -304,26 +304,52 @@ mod tests {
             "max_tokens": 64
         });
 
-        let converted = build_standard_request_body(
-            &request,
-            "claude:messages",
-            "gpt-5.4",
-            "codex",
-            "openai:responses",
-            "/v1/messages",
-            false,
-            None,
-            None,
-        )
-        .expect("claude cli should convert to codex request");
+        for (model, thinking, expected_summary) in [
+            ("gpt-5.4", None, None),
+            ("gpt-5.2", None, Some("auto")),
+            (
+                "gpt-5.4",
+                Some(json!({"type": "enabled", "budget_tokens": 4096})),
+                Some("detailed"),
+            ),
+            (
+                "gpt-5.4",
+                Some(json!({"type": "enabled", "budget_tokens": 4096, "display": "omitted"})),
+                None,
+            ),
+        ] {
+            let mut request = base_request.clone();
+            if let Some(thinking) = thinking {
+                request["thinking"] = thinking;
+            }
 
-        assert!(converted.get("metadata").is_none());
-        assert_eq!(converted["store"], false);
-        assert!(converted.get("instructions").is_none());
-        assert_eq!(converted["include"], json!(["reasoning.encrypted_content"]));
-        assert_eq!(converted["parallel_tool_calls"], true);
-        assert_eq!(converted["reasoning"]["effort"], "medium");
-        assert_eq!(converted["reasoning"]["summary"], "auto");
+            let converted = build_standard_request_body(
+                &request,
+                "claude:messages",
+                model,
+                "codex",
+                "openai:responses",
+                "/v1/messages",
+                false,
+                None,
+                None,
+            )
+            .expect("claude cli should convert to codex request");
+
+            assert!(converted.get("metadata").is_none());
+            assert_eq!(converted["store"], false);
+            assert!(converted.get("instructions").is_none());
+            assert_eq!(converted["include"], json!(["reasoning.encrypted_content"]));
+            assert_eq!(converted["parallel_tool_calls"], true);
+            assert_eq!(converted["reasoning"]["effort"], "medium");
+            assert_eq!(
+                converted["reasoning"]
+                    .get("summary")
+                    .and_then(Value::as_str),
+                expected_summary,
+                "model: {model}, request: {request}"
+            );
+        }
     }
 
     #[test]
