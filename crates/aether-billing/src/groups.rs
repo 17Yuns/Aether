@@ -245,8 +245,10 @@ mod tests {
 
     #[test]
     fn hidden_groups_remain_billable_but_are_not_advertised() {
-        let mut config = PricingGroupsConfig::default();
-        config.enabled = true;
+        let mut config = PricingGroupsConfig {
+            enabled: true,
+            ..Default::default()
+        };
         config.groups.push(PricingGroup {
             id: "private".into(),
             name: "专属".into(),
@@ -311,8 +313,10 @@ mod tests {
     }
     #[test]
     fn key_selection_rejects_hidden_groups_and_ignores_feature_injection() {
-        let mut config = PricingGroupsConfig::default();
-        config.enabled = true;
+        let mut config = PricingGroupsConfig {
+            enabled: true,
+            ..Default::default()
+        };
         config.groups.push(PricingGroup {
             id: "private".into(),
             name: "专属".into(),
