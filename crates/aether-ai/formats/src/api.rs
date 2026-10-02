@@ -170,6 +170,10 @@ pub use crate::formats::shared::{
     maybe_build_ai_surface_stream_rewriter, resolve_finalize_stream_rewrite_mode,
     AiSurfaceFinalizeError, AiSurfaceStreamRewriter, FinalizeStreamRewriteMode,
 };
+pub use crate::formats::typesafe::{
+    systemone_test_request, validate_systemone_request, SYSTEMONE_SYNC_FINALIZE_REPORT_KIND,
+    SYSTEMONE_SYNC_PLAN_KIND,
+};
 pub use crate::formats::{
     claude::messages::{
         resolve_stream_spec as resolve_claude_stream_spec,

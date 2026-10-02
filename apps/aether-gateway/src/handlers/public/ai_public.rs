@@ -171,7 +171,7 @@ pub(crate) async fn maybe_build_local_ai_public_response(
             serde_json::from_slice::<Value>(bytes)
                 .map_err(|_| "System One request must be valid JSON")
         })
-        .and_then(|body| aether_ai_formats::formats::typesafe::validate_systemone_request(&body));
+        .and_then(|body| crate::ai_serving::validate_systemone_request(&body));
         if let Err(detail) = validation {
             return Some(
                 (

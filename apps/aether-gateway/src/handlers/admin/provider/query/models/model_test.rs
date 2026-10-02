@@ -570,7 +570,7 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
         || provider_query_extract_mapped_model_name(payload).is_some();
     if client_api_format == "typesafe:systemone" {
         let mut body = provider_query_extract_request_body(payload)
-            .unwrap_or_else(|| aether_ai_formats::formats::typesafe::systemone_test_request(model));
+            .unwrap_or_else(|| crate::ai_serving::systemone_test_request(model));
         if let Some(object) = body.as_object_mut() {
             if override_custom_model {
                 object.insert("model".to_string(), Value::String(model.to_string()));
@@ -3237,9 +3237,7 @@ async fn provider_query_execute_standard_test_candidate(
         }
         "openai:search" | "typesafe:systemone" => {
             if provider_api_format == "typesafe:systemone" {
-                if let Err(detail) =
-                    aether_ai_formats::formats::typesafe::validate_systemone_request(&request_body)
-                {
+                if let Err(detail) = crate::ai_serving::validate_systemone_request(&request_body) {
                     return Ok(provider_query_skipped_execution_outcome(
                         request_body.clone(),
                         detail.to_string(),
