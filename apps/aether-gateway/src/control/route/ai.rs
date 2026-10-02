@@ -12,6 +12,16 @@ pub(super) fn classify_ai_public_route(
 ) -> Option<ClassifiedRoute> {
     if let Some(route) = classify_antigravity_v1internal_route(method, normalized_path) {
         Some(route)
+    } else if method == http::Method::POST
+        && matches!(normalized_path, "/v1/systemone" | "/jev/v1/systemone")
+    {
+        Some(classified(
+            "ai_public",
+            "typesafe",
+            "systemone",
+            "typesafe:systemone",
+            true,
+        ))
     } else if method == http::Method::POST && normalized_path == "/v1/chat/completions" {
         Some(classified(
             "ai_public",

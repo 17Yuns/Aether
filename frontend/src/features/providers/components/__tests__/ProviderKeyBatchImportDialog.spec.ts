@@ -15,14 +15,14 @@ function button(text: string) {
   return found
 }
 describe('API key pool import', () => {
-  it('imports pasted keys with generated names and chat format without OAuth', async () => {
+  it.each([['ClinePass', 'openai:chat'], ['Jev', 'typesafe:systemone']])('imports %s pool keys without OAuth', async (providerName, apiFormat) => {
     mocks.batchImportPoolKeys.mockResolvedValue({ imported: 2, errors: [] })
     root = document.createElement('div')
     document.body.appendChild(root)
     let saved = false
     app = createApp(defineComponent({ setup: () => () => h(ProviderKeyBatchImportDialog, {
-      open: true, providerId: 'clinepass-1', providerName: 'ClinePass',
-      allowBareKeys: true, availableApiFormats: ['openai:chat'], onSaved: () => { saved = true },
+      open: true, providerId: 'provider-1', providerName,
+      allowBareKeys: true, availableApiFormats: [apiFormat], onSaved: () => { saved = true },
     }) }))
     app.mount(root)
     await nextTick()
@@ -36,12 +36,12 @@ describe('API key pool import', () => {
     await nextTick()
     button('导入 2 个 Key').click()
     await vi.waitFor(() => expect(saved).toBe(true))
-    expect(mocks.batchImportPoolKeys).toHaveBeenCalledWith('clinepass-1', expect.objectContaining({
+    expect(mocks.batchImportPoolKeys).toHaveBeenCalledWith('provider-1', expect.objectContaining({
       keys: [
-        { name: expect.stringMatching(/^ClinePass-\d+-1$/), api_key: 'sk-first', auth_type: 'api_key' },
-        { name: expect.stringMatching(/^ClinePass-\d+-2$/), api_key: 'sk-second', auth_type: 'api_key' },
+        { name: expect.stringMatching(new RegExp(`^${providerName}-\\d+-1$`)), api_key: 'sk-first', auth_type: 'api_key' },
+        { name: expect.stringMatching(new RegExp(`^${providerName}-\\d+-2$`)), api_key: 'sk-second', auth_type: 'api_key' },
       ],
-      api_formats: ['openai:chat'],
+      api_formats: [apiFormat],
     }))
   })
 })

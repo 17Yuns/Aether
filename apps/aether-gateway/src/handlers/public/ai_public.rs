@@ -115,8 +115,10 @@ pub(crate) fn ai_public_local_requires_buffered_body(
         .is_some_and(|decision| {
             decision.route_class.as_deref() == Some("ai_public")
                 && request_context.request_method == http::Method::POST
-                && ((decision.route_family.as_deref() == Some("claude")
-                    && decision.route_kind.as_deref() == Some("count_tokens"))
+                && ((decision.route_family.as_deref() == Some("typesafe")
+                    && decision.route_kind.as_deref() == Some("systemone"))
+                    || (decision.route_family.as_deref() == Some("claude")
+                        && decision.route_kind.as_deref() == Some("count_tokens"))
                     || (decision.route_family.as_deref() == Some("openai")
                         && decision.route_kind.as_deref() == Some("embedding")
                         && request_context.request_path == "/v1/embeddings")
@@ -140,6 +142,45 @@ pub(crate) async fn maybe_build_local_ai_public_response(
     let decision = request_context.control_decision.as_ref()?;
     if decision.route_class.as_deref() != Some("ai_public") {
         return None;
+    }
+
+    if decision.route_family.as_deref() == Some("typesafe")
+        && decision.route_kind.as_deref() == Some("systemone")
+    {
+        if decision.auth_context.is_none() {
+            return Some(
+                (
+                    http::StatusCode::UNAUTHORIZED,
+                    Json(json!({"detail":"Invalid API key provided"})),
+                )
+                    .into_response(),
+            );
+        }
+        let content_type_is_json = request_context
+            .request_content_type
+            .as_deref()
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
+        let validation = if content_type_is_json {
+            Ok(())
+        } else {
+            Err("System One request content-type must be application/json")
+        }
+        .and_then(|()| request_body.ok_or("System One request body is required"))
+        .and_then(|bytes| {
+            serde_json::from_slice::<Value>(bytes)
+                .map_err(|_| "System One request must be valid JSON")
+        })
+        .and_then(|body| aether_ai_formats::formats::typesafe::validate_systemone_request(&body));
+        if let Err(detail) = validation {
+            return Some(
+                (
+                    http::StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"detail":detail})),
+                )
+                    .into_response(),
+            );
+        }
     }
 
     if let Some(response) =

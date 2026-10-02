@@ -18,6 +18,20 @@ import {
 } from '../model-test-request'
 
 describe('buildDefaultModelTestRequestBody', () => {
+  it.each(['typesafe:systemone', 'TYPESAFE_SYSTEMONE', 'jev:systemone'])('uses native Jev questions for %s', (apiFormat) => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('jev-latest', apiFormat))
+    expect(body.model).toBe('jev-latest')
+    expect(body.state).toBeTypeOf('string')
+    expect(body.questions.is_greeting).toEqual({ type: 'noul', instructions: 'Is this a greeting?' })
+    expect(Object.keys(body).sort()).toEqual(['model', 'questions', 'state'])
+    expect(isModelTestableApiFormat(apiFormat)).toBe(true)
+  })
+
+  it('shows native answers without requiring chat completion fields', () => {
+    const answers = { flag: { type: 'noul', noul: 0.95 } }
+    expect(extractModelTestResponsePreview({ model: 'jev-1.13.0', answers, usage: { input_tokens: 307, output_tokens: 20 } })).toBe(JSON.stringify(answers))
+  })
+
   it.each([
     'openai:embedding',
     'gemini:embedding',

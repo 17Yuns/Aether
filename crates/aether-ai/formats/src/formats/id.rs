@@ -11,6 +11,7 @@ pub enum FormatFamily {
     Jina,
     Doubao,
     Aliyun,
+    TypeSafe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,6 +38,7 @@ pub enum FormatId {
     JinaRerank,
     DoubaoEmbedding,
     AliyunMultimodalEmbedding,
+    TypeSafeSystemOne,
 }
 
 impl FormatId {
@@ -65,6 +67,7 @@ impl FormatId {
             Self::JinaEmbedding | Self::JinaRerank => FormatFamily::Jina,
             Self::DoubaoEmbedding => FormatFamily::Doubao,
             Self::AliyunMultimodalEmbedding => FormatFamily::Aliyun,
+            Self::TypeSafeSystemOne => FormatFamily::TypeSafe,
         }
     }
 
@@ -93,6 +96,7 @@ impl FormatId {
             Self::JinaRerank => "jina:rerank",
             Self::DoubaoEmbedding => "doubao:embedding",
             Self::AliyunMultimodalEmbedding => "aliyun:multimodal_embedding",
+            Self::TypeSafeSystemOne => "typesafe:systemone",
         }
     }
 }
@@ -140,6 +144,7 @@ impl FromStr for FormatId {
             | "dashscope:multimodal_embedding"
             | "dashscope_embedding"
             | "dashscope_multimodal_embedding" => Ok(Self::AliyunMultimodalEmbedding),
+            "typesafe:systemone" | "jev:systemone" | "/v1/systemone" => Ok(Self::TypeSafeSystemOne),
             _ => Err(()),
         }
     }
@@ -164,6 +169,7 @@ pub fn api_format_defaults_to_non_stream(value: &str) -> bool {
             | "openai:responses:compact"
             | "openai:search"
             | "openai:image"
+            | "typesafe:systemone"
             | "claude:messages"
     )
 }

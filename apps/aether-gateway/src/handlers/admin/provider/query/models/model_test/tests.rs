@@ -1338,3 +1338,31 @@ fn provider_query_dall_e_3_image_test_keeps_single_generation_boundary() {
         "Provider request body could not be normalized for openai:image: selected provider supports n=1..1 for generation"
     );
 }
+
+#[test]
+fn systemone_model_test_defaults_and_custom_questions_use_native_contract() {
+    let default = provider_query_build_test_request_body_for_api_format(
+        &json!({}),
+        "jev-latest",
+        "/api/providers/provider-1/test-model",
+        "typesafe:systemone",
+    );
+    assert!(aether_ai_formats::formats::typesafe::validate_systemone_request(&default).is_ok());
+    assert!(default.get("messages").is_none());
+    assert!(default.get("stream").is_none());
+    let request = json!({"model":"jev-preview","state":{"record":42},"questions":{"score":{"type":"score","instructions":["Score"],"criteria":[{"meaning":"Low"},"High"]}}});
+    let custom = provider_query_build_test_request_body_for_api_format(
+        &json!({"request_body":request}),
+        "jev-latest",
+        "/api/providers/provider-1/test-model",
+        "typesafe:systemone",
+    );
+    assert_eq!(custom, request);
+    assert_eq!(
+        provider_query_standard_test_request_client_api_format(
+            "typesafe:systemone",
+            Some(&request)
+        ),
+        "typesafe:systemone"
+    );
+}

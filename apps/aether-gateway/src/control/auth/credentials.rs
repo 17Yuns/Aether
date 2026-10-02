@@ -306,6 +306,9 @@ fn select_primary_credential(
     bundle: &GatewayCredentialBundle,
 ) -> Option<GatewayPrimaryCredential> {
     let signature = auth_endpoint_signature.trim().to_ascii_lowercase();
+    if signature == "typesafe:systemone" {
+        return first_provider_api_key(bundle, &[GatewayCredentialCarrier::AuthorizationBearer]);
+    }
     if signature.starts_with("gemini:") {
         return select_gemini_credential(bundle);
     }
@@ -1005,5 +1008,39 @@ mod tests {
             "admin:endpoints_health",
         );
         assert_eq!(extracted.trusted_admin_headers, None);
+    }
+    #[test]
+    fn systemone_bearer_is_an_api_key_and_does_not_accept_cookie_or_query_auth() {
+        let headers = http::HeaderMap::from_iter([(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("Bearer sk-jev"),
+        )]);
+        let uri: Uri = "/jev/v1/systemone".parse().unwrap();
+        let credentials = super::extract_request_credentials_with_trusted_auth(
+            &headers,
+            &uri,
+            "typesafe:systemone",
+            false,
+        );
+        assert!(matches!(
+            credentials.primary,
+            Some(GatewayPrimaryCredential::ProviderApiKey {
+                carrier: GatewayCredentialCarrier::AuthorizationBearer,
+                ..
+            })
+        ));
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("session=test"),
+        );
+        let uri: Uri = "/jev/v1/systemone?key=sk-jev".parse().unwrap();
+        let credentials = super::extract_request_credentials_with_trusted_auth(
+            &headers,
+            &uri,
+            "typesafe:systemone",
+            false,
+        );
+        assert!(credentials.primary.is_none());
     }
 }

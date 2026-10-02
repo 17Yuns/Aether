@@ -143,6 +143,7 @@ fn provider_query_endpoint_route_payload(
         "gemini:interactions" if is_gemini_api => {
             ("Gemini API", "gemini_native", "interactions", "")
         }
+        "typesafe:systemone" => ("Jev System One", "typesafe_native", "systemone", ""),
         "gemini:interactions" => ("Gemini native", "gemini_native", "interactions", ""),
         "openai:embedding" if is_vertex && is_openai_compat => (
             "Vertex AI OpenAI-compatible",

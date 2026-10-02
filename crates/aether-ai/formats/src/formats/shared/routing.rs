@@ -1,3 +1,4 @@
+use crate::formats::typesafe::SYSTEMONE_SYNC_PLAN_KIND;
 use http::Method;
 use url::form_urlencoded;
 
@@ -191,6 +192,14 @@ pub fn resolve_execution_runtime_sync_plan_kind_with_client_surface(
         .unwrap_or(path);
     if route_class != Some("ai_public") {
         return None;
+    }
+
+    if route_family == Some("typesafe")
+        && route_kind == Some("systemone")
+        && *method == Method::POST
+        && matches!(path, "/v1/systemone" | "/jev/v1/systemone")
+    {
+        return Some(SYSTEMONE_SYNC_PLAN_KIND);
     }
 
     if route_family == Some("openai")
@@ -580,6 +589,7 @@ pub fn supports_sync_execution_decision_kind(plan_kind: &str) -> bool {
     matches!(
         plan_kind,
         OPENAI_CHAT_SYNC_PLAN_KIND
+            | SYSTEMONE_SYNC_PLAN_KIND
             | OPENAI_EMBEDDING_SYNC_PLAN_KIND
             | OPENAI_RERANK_SYNC_PLAN_KIND
             | OPENAI_SEARCH_SYNC_PLAN_KIND

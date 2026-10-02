@@ -1073,6 +1073,12 @@ const ADMIN_API_FORMAT_DEFINITIONS: &[AdminApiFormatDefinition] = &[
             "dashscope:multimodal_embedding",
         ],
     },
+    AdminApiFormatDefinition {
+        value: "typesafe:systemone",
+        label: "Jev System One",
+        default_path: "/v1/systemone",
+        aliases: &["typesafe", "jev", "jev:systemone"],
+    },
 ];
 
 pub fn build_admin_system_check_update_payload(current_version: String) -> serde_json::Value {

@@ -144,8 +144,13 @@ pub async fn build_standard_models_fetch_execution_plan_for_client_version(
         protected_headers.push("originator".to_string());
     }
 
-    if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
-        let resolved_auth = if is_deepseek_anthropic_models_fetch {
+    if api_format.starts_with("openai:")
+        || api_format.starts_with("claude:")
+        || api_format == "typesafe:systemone"
+    {
+        let resolved_auth = if api_format == "typesafe:systemone" {
+            resolve_local_openai_bearer_auth(transport)
+        } else if is_deepseek_anthropic_models_fetch {
             resolve_oauth_header_auth(runtime, transport)
                 .await?
                 .or_else(|| resolve_local_openai_bearer_auth(transport))
@@ -1348,5 +1353,26 @@ mod tests {
             ),
             "https://api.example.test/models?limit=100&after_id=cursor%26limit%3D10000%23fragment"
         );
+    }
+    #[tokio::test]
+    async fn systemone_catalog_fetch_uses_api_key_as_bearer() {
+        let runtime = TestRuntime {
+            oauth_auth: None,
+            proxy: None,
+        };
+        let mut transport = sample_transport("jev", "typesafe:systemone", "api_key");
+        transport.endpoint.base_url = "https://api.typesafe.ai/v1".to_string();
+        transport.key.decrypted_api_key = "typesafe-secret".to_string();
+        transport.key.decrypted_auth_config = None;
+        let plan = build_models_fetch_execution_plan(&runtime, &transport)
+            .await
+            .unwrap();
+        assert_eq!(plan.method, "GET");
+        assert_eq!(plan.url, "https://api.typesafe.ai/v1/models");
+        assert_eq!(
+            plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer typesafe-secret")
+        );
+        assert!(!plan.headers.contains_key("x-api-key"));
     }
 }

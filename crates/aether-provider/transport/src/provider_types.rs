@@ -286,6 +286,23 @@ const XAI_RUNTIME_POLICY: ProviderRuntimePolicy = ProviderRuntimePolicy {
     ..STANDARD_RUNTIME_POLICY
 };
 
+const JEV_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
+    provider_type: "jev",
+    version: 1,
+    base_url: "https://api.typesafe.ai/v1",
+    endpoints: &[FixedProviderEndpointTemplate {
+        item_key: "systemone",
+        api_format: "typesafe:systemone",
+        custom_path: None,
+        config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
+    }],
+    runtime_policy: ProviderRuntimePolicy {
+        fixed_provider: true,
+        supports_local_openai_chat_transport: false,
+        ..STANDARD_RUNTIME_POLICY
+    },
+};
+
 const CLINEPASS_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
     provider_type: "clinepass",
     version: 1,
@@ -554,6 +571,7 @@ pub fn fixed_provider_template(provider_type: &str) -> Option<&'static FixedProv
     match provider_type.trim().to_ascii_lowercase().as_str() {
         "claude_code" => Some(&CLAUDE_CODE_FIXED_PROVIDER_TEMPLATE),
         "clinepass" => Some(&CLINEPASS_FIXED_PROVIDER_TEMPLATE),
+        "jev" => Some(&JEV_FIXED_PROVIDER_TEMPLATE),
         "codex" => Some(&CODEX_FIXED_PROVIDER_TEMPLATE),
         "chatgpt_web" => Some(&CHATGPT_WEB_FIXED_PROVIDER_TEMPLATE),
         "kiro" => Some(&KIRO_FIXED_PROVIDER_TEMPLATE),
@@ -711,6 +729,19 @@ mod tests {
         provider_type_supports_local_same_format_transport, FixedProviderEndpointConfigValue,
         ADMIN_PROVIDER_OAUTH_TEMPLATE_TYPES,
     };
+
+    #[test]
+    fn jev_fixed_provider_exposes_only_native_systemone_and_api_key_auth() {
+        let template = fixed_provider_template("Jev").unwrap();
+        assert_eq!(template.base_url, "https://api.typesafe.ai/v1");
+        assert_eq!(template.endpoints.len(), 1);
+        assert_eq!(template.endpoints[0].api_format, "typesafe:systemone");
+        assert!(template.runtime_policy.supports_model_fetch);
+        assert!(!template.runtime_policy.enable_format_conversion_by_default);
+        assert!(!template.runtime_policy.supports_local_openai_chat_transport);
+        assert!(provider_type_admin_oauth_template("jev").is_none());
+        assert!(provider_type_supports_local_same_format_transport("jev"));
+    }
 
     #[test]
     fn clinepass_fixed_provider_uses_chat_endpoint_with_conversion_enabled() {

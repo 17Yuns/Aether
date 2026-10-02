@@ -31,7 +31,9 @@ pub(super) fn provider_query_standard_test_client_api_format(
     provider_api_format: &str,
 ) -> &'static str {
     let normalized_api_format = crate::ai_serving::normalize_api_format_alias(provider_api_format);
-    if normalized_api_format == "openai:responses" {
+    if normalized_api_format == "typesafe:systemone" {
+        "typesafe:systemone"
+    } else if normalized_api_format == "openai:responses" {
         "openai:responses"
     } else if normalized_api_format == "claude:messages" {
         "claude:messages"
@@ -143,6 +145,7 @@ pub(super) fn provider_query_standard_test_unsupported_reason(
         | "openai:responses:compact"
         | "openai:search"
         | "claude:messages"
+        | "typesafe:systemone"
         | "openai:embedding"
         | "jina:embedding"
         | "doubao:embedding"
@@ -336,6 +339,7 @@ pub(super) fn provider_query_test_adapter_for_provider_api_format(
             | "claude:messages"
             | "gemini:generate_content"
             | "gemini:interactions"
+            | "typesafe:systemone"
             | "openai:embedding"
             | "gemini:embedding"
             | "jina:embedding"
@@ -438,6 +442,7 @@ pub(super) fn provider_query_transport_supports_model_test_execution(
         "openai:responses"
         | "openai:responses:compact"
         | "openai:search"
+        | "typesafe:systemone"
         | "openai:embedding"
         | "jina:embedding"
         | "doubao:embedding"

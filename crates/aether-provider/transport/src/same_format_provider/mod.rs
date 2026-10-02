@@ -887,6 +887,7 @@ pub fn same_format_provider_transport_unsupported_reason_for_trace(
     let normalized_api_format =
         match aether_ai_formats::normalize_api_format_alias(provider_api_format).as_str() {
             "openai:chat" => "openai:chat",
+            "typesafe:systemone" => "typesafe:systemone",
             "openai:responses" => "openai:responses",
             "openai:responses:compact" => "openai:responses:compact",
             "openai:search" => "openai:search",
@@ -973,6 +974,7 @@ fn resolve_same_format_standard_direct_auth(
     if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:embedding")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:search")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:realtime")
+        || aether_ai_formats::api_format_alias_matches(provider_api_format, "typesafe:systemone")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "codex:live")
     {
         resolve_local_openai_bearer_auth(transport)

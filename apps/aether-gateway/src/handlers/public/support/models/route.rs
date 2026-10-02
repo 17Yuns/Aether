@@ -458,6 +458,9 @@ pub(super) async fn maybe_build_local_models_route_response(
                     );
                     build_gemini_models_list_response(&rows, page_size, page_token.as_deref())
                 }
+                "typesafe:systemone" => {
+                    super::models_responses::build_typesafe_models_list_response(state, &rows).await
+                }
                 _ => build_openai_models_list_response(&rows),
             };
             Some(response)

@@ -54,6 +54,9 @@ pub fn request_candidate_api_format_preference(
     let client_api_format = normalize_api_format_alias(client_api_format);
     let provider_api_format = normalize_api_format_alias(provider_api_format);
 
+    if client_api_format == "typesafe:systemone" {
+        return (provider_api_format == "typesafe:systemone").then_some((0, 0));
+    }
     if client_api_format == "openai:responses:compact" {
         return (provider_api_format == "openai:responses:compact").then_some((0, 0));
     }
@@ -109,9 +112,16 @@ pub fn request_candidate_api_format_preference(
 
 pub fn request_candidate_api_formats(
     client_api_format: &str,
-    _require_streaming: bool,
+    require_streaming: bool,
 ) -> Vec<&'static str> {
     let client_api_format = normalize_api_format_alias(client_api_format);
+    if client_api_format == "typesafe:systemone" {
+        return if require_streaming {
+            Vec::new()
+        } else {
+            vec!["typesafe:systemone"]
+        };
+    }
     if client_api_format == "openai:responses:compact" {
         return vec!["openai:responses:compact"];
     }

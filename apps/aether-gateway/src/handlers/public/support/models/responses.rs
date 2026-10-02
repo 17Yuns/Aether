@@ -9,8 +9,68 @@ use serde_json::json;
 
 const PUBLIC_MODELS_OWNER: &str = "aether";
 
+pub(super) async fn build_typesafe_models_list_response(
+    state: &crate::AppState,
+    rows: &[StoredMinimalCandidateSelectionRow],
+) -> Response<Body> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut catalogs = std::collections::BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut models = Vec::new();
+    for row in rows {
+        if !seen.insert(row.global_model_name.clone()) {
+            continue;
+        }
+        let target = (row.provider_id.clone(), row.key_id.clone());
+        if !catalogs.contains_key(&target) {
+            let cache_key = format!("upstream_models:{}:{}", row.provider_id, row.key_id);
+            let mut raw = state
+                .runtime_state()
+                .kv_get(&cache_key)
+                .await
+                .ok()
+                .flatten();
+            if raw.is_none() && tokio::time::Instant::now() < deadline {
+                let _ = tokio::time::timeout_at(
+                    deadline,
+                    crate::model_fetch::perform_model_fetch_for_key(
+                        state,
+                        &row.provider_id,
+                        &row.key_id,
+                    ),
+                )
+                .await;
+                raw = state
+                    .runtime_state()
+                    .kv_get(&cache_key)
+                    .await
+                    .ok()
+                    .flatten();
+            }
+            let cards = raw
+                .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+                .unwrap_or_default();
+            catalogs.insert(target.clone(), cards);
+        }
+        let upstream_model =
+            aether_scheduler_core::select_provider_model_name(row, "typesafe:systemone");
+        let card = catalogs.get(&target).and_then(|cards| {
+            cards.iter().find(|card| {
+                card.get("id").and_then(serde_json::Value::as_str) == Some(&upstream_model)
+            })
+        });
+        models.push(json!({
+            "name":row.global_model_name,
+            "description":card.and_then(|card| card.get("description")).and_then(serde_json::Value::as_str).unwrap_or(&upstream_model),
+            "release_date":card.and_then(|card| card.get("release_date")).and_then(serde_json::Value::as_str).unwrap_or(""),
+        }));
+    }
+    Json(json!({"models":models})).into_response()
+}
+
 pub(crate) fn build_models_auth_error_response(api_format: &str) -> Response<Body> {
     match api_format {
+        "typesafe:systemone" => (http::StatusCode::UNAUTHORIZED, Json(json!({"detail":"Invalid API key provided"}))).into_response(),
         "claude:messages" => (
             http::StatusCode::UNAUTHORIZED,
             Json(json!({
@@ -89,6 +149,7 @@ pub(super) fn build_models_not_found_response(model_id: &str, api_format: &str) 
 
 pub(super) fn build_empty_models_list_response(api_format: &str) -> Response<Body> {
     match api_format {
+        "typesafe:systemone" => Json(json!({"models":[]})).into_response(),
         "openai:responses" => Json(json!({ "models": [] })).into_response(),
         "claude:messages" => Json(json!({
             "data": [],

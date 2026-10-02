@@ -10,6 +10,7 @@ pub mod matrix;
 pub mod openai;
 pub mod registry;
 pub mod shared;
+pub mod typesafe;
 
 pub use context::{FormatContext, FormatError};
 pub use id::{

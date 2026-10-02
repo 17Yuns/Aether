@@ -10,6 +10,7 @@ use crate::contracts::{
     OPENAI_REALTIME_STREAM_PLAN_KIND, OPENAI_RERANK_SYNC_PLAN_KIND, OPENAI_SEARCH_SYNC_PLAN_KIND,
     OPENAI_SEARCH_SYNC_SUCCESS_REPORT_KIND,
 };
+use crate::formats::typesafe::{SYSTEMONE_SYNC_FINALIZE_REPORT_KIND, SYSTEMONE_SYNC_PLAN_KIND};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSameFormatProviderFamily {
@@ -29,6 +30,14 @@ pub struct LocalSameFormatProviderSpec {
 
 pub fn resolve_sync_spec(plan_kind: &str) -> Option<LocalSameFormatProviderSpec> {
     match plan_kind {
+        SYSTEMONE_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
+            api_format: "typesafe:systemone",
+            decision_kind: SYSTEMONE_SYNC_PLAN_KIND,
+            report_kind: SYSTEMONE_SYNC_FINALIZE_REPORT_KIND,
+            family: LocalSameFormatProviderFamily::Standard,
+            require_streaming: false,
+            operation: None,
+        }),
         CLAUDE_CHAT_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
             api_format: "claude:messages",
             decision_kind: CLAUDE_CHAT_SYNC_PLAN_KIND,

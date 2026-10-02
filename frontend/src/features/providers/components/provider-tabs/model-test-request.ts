@@ -166,6 +166,13 @@ export function buildDefaultModelTestRequestBody(
 ): string {
   const normalizedApiFormat = normalizeApiFormatAlias(apiFormat ?? '')
 
+  if (normalizedApiFormat === 'typesafe:systemone') {
+    return JSON.stringify({
+      model: modelName, state: DEFAULT_MODEL_TEST_MESSAGE,
+      questions: { is_greeting: { type: 'noul', instructions: 'Is this a greeting?' } },
+    }, null, 2)
+  }
+
   if (normalizedApiFormat === 'aliyun:multimodal_embedding') {
     return JSON.stringify({
       model: modelName,

@@ -42,7 +42,8 @@ pub fn parse_request(
         FormatId::OpenAiRealtime
         | FormatId::OpenAiSearch
         | FormatId::CodexLive
-        | FormatId::GeminiInteractions => None,
+        | FormatId::GeminiInteractions
+        | FormatId::TypeSafeSystemOne => None,
     }
     .ok_or_else(|| FormatError::RequestParseFailed {
         format: source.as_str().to_string(),
@@ -79,7 +80,8 @@ fn emit_request_inner(
         FormatId::OpenAiRealtime
         | FormatId::OpenAiSearch
         | FormatId::CodexLive
-        | FormatId::GeminiInteractions => None,
+        | FormatId::GeminiInteractions
+        | FormatId::TypeSafeSystemOne => None,
     }
     .ok_or_else(|| FormatError::RequestEmitFailed {
         format: target.as_str().to_string(),
@@ -393,7 +395,8 @@ pub fn parse_response(
         | FormatId::DoubaoEmbedding
         | FormatId::AliyunMultimodalEmbedding
         | FormatId::CodexLive
-        | FormatId::GeminiInteractions => None,
+        | FormatId::GeminiInteractions
+        | FormatId::TypeSafeSystemOne => None,
     }
     .ok_or_else(|| FormatError::ResponseParseFailed {
         format: source.as_str().to_string(),
@@ -434,7 +437,8 @@ fn emit_response_inner(
         | FormatId::DoubaoEmbedding
         | FormatId::AliyunMultimodalEmbedding
         | FormatId::CodexLive
-        | FormatId::GeminiInteractions => None,
+        | FormatId::GeminiInteractions
+        | FormatId::TypeSafeSystemOne => None,
     }
     .ok_or_else(|| FormatError::ResponseEmitFailed {
         format: target.as_str().to_string(),
@@ -1218,6 +1222,7 @@ fn standard_request_root_field_is_audited(source: FormatId, key: &str) -> bool {
         | FormatId::JinaRerank
         | FormatId::DoubaoEmbedding
         | FormatId::AliyunMultimodalEmbedding
+        | FormatId::TypeSafeSystemOne
         | FormatId::CodexLive => true,
     }
 }
@@ -1871,6 +1876,7 @@ fn validate_source_response_stop_enums(
         | FormatId::JinaRerank
         | FormatId::DoubaoEmbedding
         | FormatId::AliyunMultimodalEmbedding
+        | FormatId::TypeSafeSystemOne
         | FormatId::CodexLive => Ok(()),
     }
 }

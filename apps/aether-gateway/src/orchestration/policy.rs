@@ -127,7 +127,7 @@ pub(crate) fn local_failover_policy_from_transport(
                 .and_then(|value| u64::try_from(value).ok())
         });
 
-    LocalFailoverPolicy {
+    let mut policy = LocalFailoverPolicy {
         routing_rules: RoutingFailoverRules::default(),
         max_retries,
         max_transfer_count: provider_config
@@ -179,7 +179,16 @@ pub(crate) fn local_failover_policy_from_transport(
         error_stop_patterns: rules
             .map(|value| parse_regex_rules(value, "error_stop_patterns"))
             .unwrap_or_default(),
+    };
+    // System One validation failures describe the caller's fields. Retrying another
+    // API key cannot repair them; explicit administrator retry rules still apply.
+    if crate::ai_serving::normalize_api_format_alias(&transport.endpoint.api_format)
+        == "typesafe:systemone"
+        && !policy.continue_status_codes.contains(&422)
+    {
+        policy.stop_status_codes.insert(422);
     }
+    policy
 }
 
 pub(crate) fn local_failover_policy_from_report_context(
@@ -704,5 +713,19 @@ mod tests {
         assert!(!ResponsesWebSocketAdapter::Codex.supports_provider_type("openai"));
         assert!(ResponsesWebSocketAdapter::Standard.supports_provider_type("custom"));
         assert!(!ResponsesWebSocketAdapter::Standard.supports_provider_type("codex"));
+    }
+    #[test]
+    fn systemone_stops_validation_errors_but_keeps_rate_limit_failover() {
+        let mut transport = sample_transport(None, None, None);
+        transport.endpoint.api_format = "typesafe:systemone".into();
+        let policy = local_failover_policy_from_transport(&transport);
+        assert!(policy.stop_status_codes.contains(&422));
+        assert!(!policy.stop_status_codes.contains(&429));
+        assert!(!policy.stop_status_codes.contains(&529));
+        transport.provider.config =
+            Some(json!({"failover_rules":{"continue_on_status_codes":[422]}}));
+        let policy = local_failover_policy_from_transport(&transport);
+        assert!(!policy.stop_status_codes.contains(&422));
+        assert!(policy.continue_status_codes.contains(&422));
     }
 }

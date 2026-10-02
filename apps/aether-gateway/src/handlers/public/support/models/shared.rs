@@ -14,6 +14,7 @@ pub(crate) fn models_api_format(request_context: &GatewayPublicRequestContext) -
         .filter(|signature| !signature.is_empty())?;
     match crate::ai_serving::normalize_api_format_alias(signature).as_str() {
         "openai:chat" => Some("openai:chat"),
+        "typesafe:systemone" => Some("typesafe:systemone"),
         "openai:responses" => Some("openai:responses"),
         "openai:responses:compact" => Some("openai:responses:compact"),
         "openai:image" => Some("openai:image"),
@@ -56,6 +57,7 @@ pub(super) fn models_query_api_formats(api_format: &str) -> &'static [&'static s
         | "claude:messages"
         | "gemini:generate_content" => MODELS_CROSS_FORMAT_QUERY_API_FORMATS,
         "openai:image" => &["openai:image"],
+        "typesafe:systemone" => &["typesafe:systemone"],
         "openai:embedding"
         | "jina:embedding"
         | "gemini:embedding"

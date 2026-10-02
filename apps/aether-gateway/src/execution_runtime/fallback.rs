@@ -189,6 +189,9 @@ pub(crate) fn resolve_core_sync_error_finalize_report_kind(
     }
 
     let report_kind = match plan_kind {
+        aether_ai_formats::formats::typesafe::SYSTEMONE_SYNC_PLAN_KIND => {
+            aether_ai_formats::formats::typesafe::SYSTEMONE_SYNC_FINALIZE_REPORT_KIND
+        }
         "openai_chat_sync" => "openai_chat_sync_finalize",
         "openai_responses_sync" => "openai_responses_sync_finalize",
         "openai_responses_compact_sync" => "openai_responses_compact_sync_finalize",

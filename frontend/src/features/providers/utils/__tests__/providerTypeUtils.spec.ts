@@ -4,6 +4,13 @@ import { normalizeBatchImportCredentials } from '@/api/endpoints/provider_oauth'
 import { isKeyManagedProviderType, isOAuthAccountProviderType } from '../providerTypeUtils'
 
 describe('providerTypeUtils', () => {
+  it('treats Jev and ClinePass as API Key pools', () => {
+    for (const provider of ['jev', 'Jev', 'clinepass', 'ClinePass']) {
+      expect(isKeyManagedProviderType(provider)).toBe(true)
+      expect(isOAuthAccountProviderType(provider)).toBe(false)
+    }
+  })
+
   it('treats ChatGPT-Web as an OAuth account provider', () => {
     expect(isOAuthAccountProviderType('chatgpt_web')).toBe(true)
     expect(isOAuthAccountProviderType('ChatGPT_Web')).toBe(true)

@@ -3629,6 +3629,12 @@ mod tests {
     }
 
     #[test]
+    fn extracts_typesafe_systemone_usage_without_total_tokens() {
+        let body = json!({"model":"jev-1.13.0","answers":{"flag":{"type":"noul","noul":0.95}},"usage":{"input_tokens":307,"output_tokens":20}});
+        assert_eq!(extract_token_counts_from_json(&body), Some((307, 20, 327)));
+    }
+
+    #[test]
     fn extracts_openai_usage_tokens() {
         let tokens = extract_token_counts_from_json(&json!({
             "usage": {

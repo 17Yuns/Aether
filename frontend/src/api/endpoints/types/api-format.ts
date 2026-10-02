@@ -12,6 +12,7 @@ export const API_FORMATS = {
   OPENAI_VIDEO: 'openai:video',
   OPENAI_EMBEDDING: 'openai:embedding',
   OPENAI_RERANK: 'openai:rerank',
+  TYPESAFE_SYSTEMONE: 'typesafe:systemone',
   CODEX_LIVE: 'codex:live',
   GEMINI: 'gemini:generate_content',
   GEMINI_GENERATE_CONTENT: 'gemini:generate_content',
@@ -39,6 +40,7 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   [API_FORMATS.OPENAI_VIDEO]: 'OpenAI Video',
   [API_FORMATS.OPENAI_EMBEDDING]: 'OpenAI Embedding',
   [API_FORMATS.OPENAI_RERANK]: 'OpenAI Rerank',
+  [API_FORMATS.TYPESAFE_SYSTEMONE]: 'Jev System One',
   [API_FORMATS.CODEX_LIVE]: 'OpenAI Live',
   [API_FORMATS.GEMINI_GENERATE_CONTENT]: 'Gemini Generate Content',
   [API_FORMATS.GEMINI_INTERACTIONS]: 'Gemini Interactions',
@@ -86,6 +88,7 @@ export const API_FORMAT_SHORT: Record<string, string> = {
   [API_FORMATS.OPENAI_VIDEO]: 'OV',
   [API_FORMATS.OPENAI_EMBEDDING]: 'OE',
   [API_FORMATS.OPENAI_RERANK]: 'ORR',
+  [API_FORMATS.TYPESAFE_SYSTEMONE]: 'TS',
   [API_FORMATS.CODEX_LIVE]: 'OL',
   [API_FORMATS.CLAUDE_MESSAGES]: 'CM',
   [API_FORMATS.GEMINI_GENERATE_CONTENT]: 'G',
@@ -145,6 +148,7 @@ export const API_FORMAT_ORDER: string[] = [
   API_FORMATS.JINA_RERANK,
   API_FORMATS.DOUBAO_EMBEDDING,
   API_FORMATS.ALIYUN_MULTIMODAL_EMBEDDING,
+  API_FORMATS.TYPESAFE_SYSTEMONE,
 ]
 
 // Family 显示名称映射
@@ -156,6 +160,7 @@ export const API_FORMAT_FAMILY_LABELS: Record<string, string> = {
   jina: 'Jina',
   doubao: 'Doubao',
   aliyun: 'Aliyun',
+  typesafe: 'Jev',
 }
 
 // Kind 显示名称映射
@@ -174,10 +179,11 @@ export const API_FORMAT_KIND_LABELS: Record<string, string> = {
   files: 'Files',
   embedding: 'Embedding',
   rerank: 'Rerank',
+  systemone: 'System One',
 }
 
 // Family 排序顺序
-const FAMILY_ORDER = ['openai', 'codex', 'claude', 'gemini', 'jina', 'doubao', 'aliyun']
+const FAMILY_ORDER = ['openai', 'codex', 'claude', 'gemini', 'jina', 'doubao', 'aliyun', 'typesafe']
 
 // 工具函数：从 API 格式中提取 family 和 kind
 export function parseApiFormat(format: string): { family: string; kind: string } {
@@ -214,6 +220,9 @@ export function normalizeApiFormatAlias(format: string | null | undefined): stri
       return API_FORMATS.OPENAI_EMBEDDING
     case 'OPENAI_RERANK':
       return API_FORMATS.OPENAI_RERANK
+    case 'TYPESAFE_SYSTEMONE':
+    case 'JEV:SYSTEMONE':
+      return API_FORMATS.TYPESAFE_SYSTEMONE
     case 'CODEX_LIVE':
     case 'LIVE':
       return API_FORMATS.CODEX_LIVE
@@ -333,7 +342,7 @@ export function compareApiFormats(a: string, b: string): number {
   return aIdx - bIdx
 }
 
-// openai family 格式只支持 bearer（Authorization header），不允许覆盖认证方式
+// OpenAI 和 Jev 使用 Bearer 认证，不允许覆盖认证方式
 export function formatSupportsAuthOverride(format: string): boolean {
-  return parseApiFormat(normalizeApiFormatAlias(format)).family !== 'openai'
+  return !['openai', 'typesafe'].includes(parseApiFormat(normalizeApiFormatAlias(format)).family)
 }

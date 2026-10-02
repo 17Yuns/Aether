@@ -568,6 +568,20 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
     let client_api_format = provider_query_normalize_api_format_alias(client_api_format);
     let override_custom_model = route_path.ends_with("/test-model-failover")
         || provider_query_extract_mapped_model_name(payload).is_some();
+    if client_api_format == "typesafe:systemone" {
+        let mut body = provider_query_extract_request_body(payload)
+            .unwrap_or_else(|| aether_ai_formats::formats::typesafe::systemone_test_request(model));
+        if let Some(object) = body.as_object_mut() {
+            if override_custom_model {
+                object.insert("model".to_string(), Value::String(model.to_string()));
+            } else {
+                object
+                    .entry("model".to_string())
+                    .or_insert_with(|| Value::String(model.to_string()));
+            }
+        }
+        return body;
+    }
     if let Some(mut body) = provider_query_extract_request_body(payload) {
         let has_conversation = provider_query_request_body_has_conversation_for_api_format(
             &body,
@@ -3221,7 +3235,17 @@ async fn provider_query_execute_standard_test_candidate(
             );
             provider_request_body
         }
-        "openai:search" => {
+        "openai:search" | "typesafe:systemone" => {
+            if provider_api_format == "typesafe:systemone" {
+                if let Err(detail) =
+                    aether_ai_formats::formats::typesafe::validate_systemone_request(&request_body)
+                {
+                    return Ok(provider_query_skipped_execution_outcome(
+                        request_body.clone(),
+                        detail.to_string(),
+                    ));
+                }
+            }
             let Some(mut provider_request_body) =
                 crate::provider_transport::build_same_format_provider_request_body(
                     crate::provider_transport::SameFormatProviderRequestBodyInput {
@@ -3450,6 +3474,7 @@ async fn provider_query_execute_standard_test_candidate(
             | "openai:search"
             | "claude:messages"
             | "gemini:generate_content"
+            | "typesafe:systemone"
             | "openai:embedding"
             | "gemini:embedding"
             | "jina:embedding"
@@ -3464,6 +3489,7 @@ async fn provider_query_execute_standard_test_candidate(
         | "openai:responses"
         | "openai:responses:compact"
         | "openai:search"
+        | "typesafe:systemone"
         | "openai:embedding"
         | "jina:embedding"
         | "doubao:embedding"

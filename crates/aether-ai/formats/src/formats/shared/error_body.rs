@@ -56,6 +56,7 @@ pub fn build_core_error_body_for_client_format(
                 Value::Object(error_object),
             )])))
         }
+        "typesafe:systemone" => Some(serde_json::json!({"detail": message})),
         "claude:messages" => {
             error_object.insert(
                 "type".to_string(),

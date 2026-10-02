@@ -17,6 +17,7 @@ const MODEL_FETCH_FORMAT_PRIORITY: &[&[&str]] = &[
         "openai:responses",
         "openai:responses:compact",
     ],
+    &["typesafe:systemone"],
     &["claude:messages"],
     &["gemini:generate_content"],
 ];
@@ -86,7 +87,7 @@ pub fn build_models_fetch_url_for_client_version(
     let provider_type = provider_type.trim().to_ascii_lowercase();
     let url = if provider_type == "codex" && api_format.starts_with("openai:") {
         build_codex_models_url(base_url, codex_client_version)
-    } else if api_format.starts_with("openai:") {
+    } else if api_format.starts_with("openai:") || api_format == "typesafe:systemone" {
         build_v1_models_url(base_url)
     } else if api_format.starts_with("claude:") {
         build_claude_models_url(base_url)
@@ -120,7 +121,10 @@ pub fn parse_models_response_page(
     let mut has_more = false;
     let mut next_after_id = None;
 
-    if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
+    if api_format.starts_with("openai:")
+        || api_format.starts_with("claude:")
+        || api_format == "typesafe:systemone"
+    {
         let items = if let Some(items) = body.get("data").and_then(Value::as_array) {
             has_more = body
                 .get("has_more")
@@ -535,7 +539,8 @@ pub fn endpoint_supports_rust_models_fetch(api_format: &str) -> bool {
     let api_format = normalize_api_format(api_format);
     matches!(
         api_format.as_str(),
-        "openai:chat"
+        "typesafe:systemone"
+            | "openai:chat"
             | "openai:responses"
             | "openai:responses:compact"
             | "claude:messages"
@@ -1123,6 +1128,15 @@ fn split_url_query(base_url: &str) -> (&str, Option<&str>) {
 }
 
 fn normalize_cached_model(item: &Value, model_id: &str, api_format: &str) -> Value {
+    if api_format == "typesafe:systemone" {
+        return json!({
+            "id":model_id,"name":model_id,"object":"model","owned_by":"jev",
+            "description":item.get("description"),"release_date":item.get("release_date"),
+            "api_format":api_format,"api_formats":[api_format],
+            "supports_streaming":false,"supports_vision":false,"supports_function_calling":false,
+            "supports_extended_thinking":false,
+        });
+    }
     let mut object = item.as_object().cloned().unwrap_or_default();
     object.insert("id".to_string(), Value::String(model_id.to_string()));
     object.insert(
@@ -2028,5 +2042,25 @@ mod tests {
         assert!(models
             .iter()
             .any(|model| model["id"] == "grok-imagine-image"));
+    }
+    #[test]
+    fn systemone_model_catalog_uses_native_names_and_preserves_metadata() {
+        assert_eq!(
+            build_models_fetch_url("jev", "typesafe:systemone", "https://api.typesafe.ai/v1"),
+            Some((
+                "https://api.typesafe.ai/v1/models".to_string(),
+                "typesafe:systemone".to_string()
+            ))
+        );
+        let body = json!({"models":[{"name":"jev-latest","description":"Stable model","release_date":"2026-09-01"},{"name":"jev-preview","description":"Preview","release_date":"2026-09-02"}]});
+        let page = parse_models_response_page("typesafe:systemone", &body).unwrap();
+        assert_eq!(page.fetched_model_ids, vec!["jev-latest", "jev-preview"]);
+        assert_eq!(page.cached_models[0]["description"], "Stable model");
+        assert_eq!(page.cached_models[0]["release_date"], "2026-09-01");
+        assert_eq!(page.cached_models[0]["supports_streaming"], false);
+        assert_eq!(
+            page.cached_models[0]["api_formats"],
+            json!(["typesafe:systemone"])
+        );
     }
 }

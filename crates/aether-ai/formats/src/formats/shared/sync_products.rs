@@ -512,6 +512,22 @@ pub fn maybe_build_standard_sync_finalize_product_from_normalized_payload(
     body_json: Option<&Value>,
     body_base64: Option<&str>,
 ) -> Result<Option<StandardSyncFinalizeNormalizedProduct>, AiSurfaceFinalizeError> {
+    if report_kind == crate::formats::typesafe::SYSTEMONE_SYNC_FINALIZE_REPORT_KIND
+        && status_code < 400
+    {
+        let body = body_json
+            .cloned()
+            .or_else(|| body_base64.and_then(decode_non_stream_sync_capture_body))
+            .ok_or_else(|| {
+                AiSurfaceFinalizeError::new("System One response body is missing".to_string())
+            })?;
+        crate::formats::typesafe::validate_systemone_response(&body)
+            .map_err(|detail| AiSurfaceFinalizeError::new(detail.to_string()))?;
+        return Ok(Some(StandardSyncFinalizeNormalizedProduct::SuccessBody(
+            body,
+        )));
+    }
+
     let capture_stream_body_base64 = if status_code < 400
         && body_base64.is_none()
         && sync_finalize_supports_capture_envelope(report_kind, report_context)

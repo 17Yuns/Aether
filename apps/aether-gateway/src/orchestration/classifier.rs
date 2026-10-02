@@ -288,6 +288,32 @@ pub(crate) fn classify_failure_disposition(
 ) -> FailureDisposition {
     if provider_api_format
         .trim()
+        .eq_ignore_ascii_case("typesafe:systemone")
+        && status_code >= 400
+    {
+        let generic = failure_disposition_from_local_classification(classification, status_code);
+        let (retry_action, failure_scope) = match status_code {
+            401 | 403 => (FailureRetryAction::NextCredential, FailureScope::Credential),
+            429 => (
+                FailureRetryAction::NextCredential,
+                FailureScope::CredentialModel,
+            ),
+            529 => (FailureRetryAction::NextEndpoint, FailureScope::Provider),
+            _ => (generic.retry_action, generic.failure_scope),
+        };
+        return FailureDisposition::new(
+            if generic.retry_action == FailureRetryAction::Stop {
+                FailureRetryAction::Stop
+            } else {
+                retry_action
+            },
+            failure_scope,
+            FailureTokenAction::None,
+            true,
+        );
+    }
+    if provider_api_format
+        .trim()
         .eq_ignore_ascii_case("claude:messages")
     {
         classify_anthropic_failure_disposition(classification, status_code)
@@ -1052,5 +1078,28 @@ mod tests {
         );
         assert_eq!(overloaded.retry_action, FailureRetryAction::Stop);
         assert_eq!(overloaded.failure_scope, FailureScope::Provider);
+    }
+    #[test]
+    fn systemone_preserves_native_errors_and_retries_without_oauth_refresh() {
+        for (status, scope) in [
+            (401, super::FailureScope::Credential),
+            (429, super::FailureScope::CredentialModel),
+            (529, super::FailureScope::Provider),
+        ] {
+            let disposition = super::classify_failure_disposition(
+                "typesafe:systemone",
+                super::LocalFailoverClassification::RetryUpstreamFailure,
+                status,
+            );
+            assert!(disposition.preserve_upstream_error);
+            assert_eq!(disposition.failure_scope, scope);
+            assert_eq!(disposition.token_action, super::FailureTokenAction::None);
+            let stopped = super::classify_failure_disposition(
+                "typesafe:systemone",
+                super::LocalFailoverClassification::StopStatusCode,
+                status,
+            );
+            assert_eq!(stopped.retry_action, super::FailureRetryAction::Stop);
+        }
     }
 }

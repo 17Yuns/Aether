@@ -96,6 +96,10 @@ function extractResponseText(responseBody: unknown, depth = 0): string | null {
     ?? extractResponseText(responseBody.body, depth + 1)
   if (wrappedText) return wrappedText
 
+  if (isJsonRecord(responseBody.answers)) {
+    return compactPreviewText(JSON.stringify(responseBody.answers))
+  }
+
   const outputText = compactPreviewText(responseBody.output_text)
   if (outputText) return outputText
 

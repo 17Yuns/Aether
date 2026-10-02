@@ -111,7 +111,8 @@ fn build_sync_plan_payload_from_decision(
         | CLAUDE_CLI_SYNC_PLAN_KIND
         | CLAUDE_COUNT_TOKENS_SYNC_PLAN_KIND
         | OPENAI_EMBEDDING_SYNC_PLAN_KIND
-        | OPENAI_RERANK_SYNC_PLAN_KIND => {
+        | OPENAI_RERANK_SYNC_PLAN_KIND
+        | aether_ai_formats::formats::typesafe::SYSTEMONE_SYNC_PLAN_KIND => {
             build_standard_sync_plan_from_decision(parts, body_json, payload)?
         }
         GEMINI_CHAT_SYNC_PLAN_KIND
