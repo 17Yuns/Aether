@@ -517,12 +517,37 @@ fn build_local_error_payload(
     kind: LocalCoreSyncErrorKind,
     fallback_payload: serde_json::Value,
 ) -> serde_json::Value {
-    if !local_error_uses_claude_format(control_decision, request_path) {
+    let client_format = if local_error_uses_claude_format(control_decision, request_path) {
+        "claude:messages"
+    } else if local_error_uses_systemone_format(control_decision, request_path) {
+        "typesafe:systemone"
+    } else {
         return fallback_payload;
-    }
+    };
 
-    build_core_error_body_for_client_format("claude:messages", message, None, kind)
+    build_core_error_body_for_client_format(client_format, message, None, kind)
         .unwrap_or(fallback_payload)
+}
+
+fn local_error_uses_systemone_format(
+    control_decision: Option<&GatewayControlDecision>,
+    request_path: Option<&str>,
+) -> bool {
+    control_decision.is_some_and(|decision| {
+        decision.route_family.as_deref() == Some("typesafe")
+            || decision
+                .auth_endpoint_signature
+                .as_deref()
+                .is_some_and(|format| {
+                    crate::ai_serving::normalize_api_format_alias(format)
+                        .eq_ignore_ascii_case("typesafe:systemone")
+                })
+    }) || request_path.is_some_and(|path| {
+        matches!(
+            path.trim_end_matches('/'),
+            "/v1/systemone" | "/jev/v1/systemone" | "/jev/v1/models"
+        )
+    })
 }
 
 fn local_error_uses_claude_format(
@@ -772,6 +797,66 @@ mod tests {
             .await
             .expect("response body should read");
         serde_json::from_slice(&body).expect("response body should be JSON")
+    }
+
+    #[tokio::test]
+    async fn systemone_local_errors_preserve_native_detail_envelopes() {
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/systemone",
+            Some("ai_public".to_string()),
+            Some("typesafe".to_string()),
+            Some("systemone".to_string()),
+            Some("typesafe:systemone".to_string()),
+        );
+        let invalid_key = build_local_auth_rejection_response(
+            "trace-auth",
+            Some(&decision),
+            &GatewayLocalAuthRejection::InvalidApiKey,
+        )
+        .expect("invalid-key response should build");
+        assert_eq!(invalid_key.status(), http::StatusCode::UNAUTHORIZED);
+        let invalid_key = response_json(invalid_key).await;
+        assert!(invalid_key["detail"].is_string(), "{invalid_key}");
+        assert!(invalid_key.get("error").is_none());
+
+        let rpm = build_local_user_rpm_limited_response(
+            "trace-rpm",
+            Some(&decision),
+            &FrontdoorUserRpmRejection {
+                scope: "api_key",
+                limit: 1,
+                retry_after: 60,
+            },
+        )
+        .expect("RPM response should build");
+        assert_eq!(rpm.status(), http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rpm.headers()["retry-after"], "60");
+        let rpm = response_json(rpm).await;
+        assert!(rpm["detail"].is_string(), "{rpm}");
+        assert!(rpm.get("error").is_none());
+
+        for path in ["/v1/systemone", "/jev/v1/systemone", "/jev/v1/models"] {
+            let forbidden = build_local_http_error_response_with_request_path(
+                "trace-pre-control",
+                None,
+                Some(path),
+                http::StatusCode::FORBIDDEN,
+                "blocked",
+            )
+            .expect("forbidden response should build");
+            assert_eq!(
+                response_json(forbidden).await,
+                serde_json::json!({"detail": "blocked"}),
+                "path: {path}"
+            );
+            let overloaded =
+                build_local_overloaded_response("trace-overload", None, Some(path), "requests", 10)
+                    .expect("overload response should build");
+            assert_eq!(overloaded.status(), http::StatusCode::SERVICE_UNAVAILABLE);
+            let overloaded = response_json(overloaded).await;
+            assert!(overloaded["detail"].is_string(), "{overloaded}");
+            assert!(overloaded.get("error").is_none());
+        }
     }
 
     #[tokio::test]

@@ -240,6 +240,34 @@ fn systemone_rejects_malformed_requests_and_requires_authentication() {
             .await
             .unwrap();
         assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        assert!(response.json::<Value>().await.unwrap()["detail"].is_string());
+        for (key, model, expected_status) in [
+            (
+                "sk-systemone-invalid",
+                "jev-latest",
+                http::StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "sk-systemone-success",
+                "jev-private",
+                http::StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = systemone_request();
+            request["model"] = json!(model);
+            let response = reqwest::Client::new()
+                .post(format!("{gateway_url}/jev/v1/systemone"))
+                .bearer_auth(key)
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = response.json::<Value>().await.unwrap();
+            assert_eq!(status, expected_status, "{body}");
+            assert!(body["detail"].is_string(), "{body}");
+            assert!(body.get("error").is_none(), "{body}");
+        }
         gateway_handle.abort();
         runtime_handle.abort();
     });

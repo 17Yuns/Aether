@@ -92,6 +92,6 @@ JavaScript SDK 同样将 `apiKey` 设为 Aether Key、`baseURL` 设为 `https://
 
 Jev 接受文本及文本的结构化描述。官方当前上下文限制为总计 64k token，`state` 加最长一个问题不超过 32k；token 预算由上游验证。该接口使用同步 JSON，不支持流式输出、多模态输入或聊天请求字段。模型测试默认生成有效的 Noul 请求，也可以在请求体编辑器中测试 Choice、Score 或混合问题。
 
-认证失败返回 401，格式或上下文验证失败返回 422。上游的 422 验证详情保持原生结构；429 限流和 529 过载进入现有号池冷却、候选切换机制，最终返回时保留状态及 `retry-after`。客户端继续使用官方 SDK 的指数退避策略，HTTP 调用者应遵循 `retry-after`，不要立即反复重试。上游速率配额动态调整，不在网关中写死。
+认证失败返回 401，模型权限不足返回 403，格式或上下文验证失败返回 422。网关产生的认证、权限、限流及无可用上游错误同样使用原生 `detail` 结构。上游的 422 验证详情保持原生结构；429 限流和 529 过载进入现有号池冷却、候选切换机制，最终返回时保留状态及 `retry-after`。客户端继续使用官方 SDK 的指数退避策略，HTTP 调用者应遵循 `retry-after`，不要立即反复重试。上游速率配额动态调整，不在网关中写死。
 
 官方参考：[API](https://docs.typesafe.ai/api)、[模型与计费](https://docs.typesafe.ai/models)、[Python SDK](https://docs.typesafe.ai/sdk/python)。

@@ -738,16 +738,18 @@ fn runtime_miss_client_error_body(api_format: Option<&str>, message: &str) -> Va
             "message": message,
         }
     });
-    let is_claude = api_format.is_some_and(|format| {
-        crate::ai_serving::normalize_api_format_alias(format)
-            .eq_ignore_ascii_case("claude:messages")
-    });
-    if !is_claude {
+    let Some(api_format) = api_format.map(crate::ai_serving::normalize_api_format_alias) else {
+        return fallback;
+    };
+    if !matches!(
+        api_format.as_str(),
+        "claude:messages" | "typesafe:systemone"
+    ) {
         return fallback;
     }
 
     build_core_error_body_for_client_format(
-        "claude:messages",
+        &api_format,
         message,
         None,
         LocalCoreSyncErrorKind::Overloaded,
@@ -1261,6 +1263,16 @@ mod tests {
         let openai = runtime_miss_client_error_body(Some("openai:chat"), "busy");
         assert_eq!(openai["error"]["type"], "http_error");
         assert!(openai.get("type").is_none());
+    }
+
+    #[test]
+    fn runtime_miss_usage_body_matches_systemone_client_envelope() {
+        for format in ["typesafe:systemone", "jev:systemone"] {
+            assert_eq!(
+                runtime_miss_client_error_body(Some(format), "No available model"),
+                json!({"detail": "No available model"})
+            );
+        }
     }
 
     #[test]
