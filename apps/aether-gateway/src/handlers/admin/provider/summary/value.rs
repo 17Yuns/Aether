@@ -213,6 +213,7 @@ pub(crate) fn build_admin_provider_summary_value(
         "ops_configured": ops_configured,
         "ops_architecture_id": ops_architecture_id,
         "kiro_simulated_cache_enabled": kiro_simulated_cache_enabled,
+        "clinepass": admin_secret_safe_json(config.and_then(|cfg| cfg.get("clinepass"))),
         "codex_cyber_flag_passthrough_enabled": codex_cyber_flag_passthrough_enabled(&provider.provider_type, provider.config.as_ref()),
         "codex_fingerprint_convergence_enabled": crate::provider_transport::codex_fingerprint_convergence_enabled(
             &provider.provider_type,

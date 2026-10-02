@@ -24,6 +24,7 @@ export interface UsageRecord {
   requested_reasoning_effort?: string | null  // 用户请求侧 reasoning 级别，用于展示转换关系
   reasoning_effort?: string | null  // 从发送给 Provider 的请求体提取的 reasoning 级别
   service_tier?: string | null  // 从发送给 Provider 的请求体提取的服务层级
+  clinepass_channel?: string | null
   actual_service_tier?: string | null  // 响应侧审计事实，不用于 Fast 展示或计费
   api_format?: string
   endpoint_api_format?: string  // 端点原生格式

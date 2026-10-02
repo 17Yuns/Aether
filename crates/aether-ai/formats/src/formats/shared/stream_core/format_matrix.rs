@@ -227,6 +227,7 @@ pub struct StreamingStandardTerminalObserver {
     provider: Option<TerminalStreamParser>,
     latest_summary: Option<ExecutionStreamTerminalSummary>,
     pending_sse_event: Option<String>,
+    clinepass_facts: crate::clinepass::ClinePassResponseFacts,
 }
 
 impl StreamingStandardTerminalObserver {
@@ -237,6 +238,12 @@ impl StreamingStandardTerminalObserver {
     ) -> Result<(), AiSurfaceFinalizeError> {
         self.ensure_initialized(report_context);
         let line = apply_sse_event_type(&mut self.pending_sse_event, line);
+        if report_context.get("provider_type").and_then(Value::as_str) == Some("clinepass") {
+            if let Some(event) = decode_json_data_line(&line) {
+                self.clinepass_facts
+                    .merge(crate::clinepass::parse_clinepass_response(&event));
+            }
+        }
         let Some(provider) = self.provider.as_mut() else {
             return Ok(());
         };
@@ -257,6 +264,7 @@ impl StreamingStandardTerminalObserver {
                 }
             }
         }
+        self.apply_clinepass_facts();
         Ok(())
     }
 
@@ -275,6 +283,10 @@ impl StreamingStandardTerminalObserver {
         event: &Value,
     ) -> Result<(), AiSurfaceFinalizeError> {
         self.ensure_initialized(report_context);
+        if report_context.get("provider_type").and_then(Value::as_str) == Some("clinepass") {
+            self.clinepass_facts
+                .merge(crate::clinepass::parse_clinepass_response(event));
+        }
         let Some(provider) = self.provider.as_mut() else {
             return Ok(());
         };
@@ -295,6 +307,7 @@ impl StreamingStandardTerminalObserver {
                 ));
             }
         }
+        self.apply_clinepass_facts();
         Ok(())
     }
 
@@ -317,6 +330,7 @@ impl StreamingStandardTerminalObserver {
                 }
             }
         }
+        self.apply_clinepass_facts();
         Ok(self.latest_summary.clone())
     }
 
@@ -350,6 +364,26 @@ impl StreamingStandardTerminalObserver {
     fn observe_frames(&mut self, frames: Vec<CanonicalStreamFrame>) {
         for frame in frames {
             self.observe_frame(frame);
+        }
+    }
+
+    fn apply_clinepass_facts(&mut self) {
+        let facts = &self.clinepass_facts;
+        let Some(summary) = self.latest_summary.as_mut() else {
+            return;
+        };
+        if facts.channel.is_some() {
+            summary.provider_channel = facts.channel.clone();
+        }
+        if let (Some(usage), Some(read)) =
+            (summary.standardized_usage.as_mut(), facts.cache_read_tokens)
+        {
+            usage.cache_read_tokens = read;
+            if usage.input_tokens == 0 {
+                if let Some(miss) = facts.cache_miss_tokens {
+                    usage.input_tokens = read.saturating_add(miss);
+                }
+            }
         }
     }
 

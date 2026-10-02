@@ -1334,6 +1334,9 @@ fn admin_usage_active_request_json(
         "request_path_and_query": admin_usage_metadata_string(item, "request_path_and_query"),
         "has_fallback": admin_usage_has_fallback(item),
     });
+    if admin_usage_metadata_string(item, "provider_type") == Some("clinepass") {
+        value["clinepass_channel"] = json!(admin_usage_metadata_string(item, "clinepass_channel"));
+    }
     value["end_to_end_time_ms"] = json!(admin_usage_metadata_u64(item, "end_to_end_time_ms"));
     value["end_to_end_first_byte_time_ms"] = json!(admin_usage_metadata_u64(
         item,
@@ -1447,6 +1450,12 @@ pub fn admin_usage_record_json(
         .as_object_mut()
         .expect("admin usage record payload should be an object");
     // 大型 json! 宏接近 Rust 的递归展开上限，响应模型在宏展开后补入即可避免编译失败。
+    if admin_usage_metadata_string(item, "provider_type") == Some("clinepass") {
+        object.insert(
+            "clinepass_channel".to_string(),
+            json!(admin_usage_metadata_string(item, "clinepass_channel")),
+        );
+    }
     object.insert(
         "response_model".to_string(),
         json!(item.provider_response_model()),
@@ -2734,6 +2743,38 @@ mod tests {
         build_admin_usage_detail_payload,
     };
     use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UsageBodyField};
+
+    #[test]
+    fn clinepass_actual_channel_is_available_in_admin_list_active_and_detail() {
+        let mut item = sample_usage("completed", Some(200), None);
+        item.request_metadata =
+            Some(json!({"provider_type":"clinepass","clinepass_channel":"baseten"}));
+        let record = admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+        );
+        assert_eq!(record["clinepass_channel"], "baseten");
+        assert_eq!(
+            admin_usage_active_request_json(&item, None, None, None)["clinepass_channel"],
+            "baseten"
+        );
+        item.request_metadata =
+            Some(json!({"provider_type":"custom","clinepass_channel":"baseten"}));
+        assert!(admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None
+        )
+        .get("clinepass_channel")
+        .is_none());
+    }
 
     fn sample_usage(
         status: &str,

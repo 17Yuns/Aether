@@ -286,6 +286,25 @@ const XAI_RUNTIME_POLICY: ProviderRuntimePolicy = ProviderRuntimePolicy {
     ..STANDARD_RUNTIME_POLICY
 };
 
+const CLINEPASS_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
+    provider_type: "clinepass",
+    version: 1,
+    base_url: crate::clinepass::CLINEPASS_BASE_URL,
+    endpoints: &[FixedProviderEndpointTemplate {
+        item_key: "openai:chat",
+        api_format: "openai:chat",
+        custom_path: None,
+        config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
+    }],
+    runtime_policy: ProviderRuntimePolicy {
+        fixed_provider: true,
+        api_format_inheritance: ProviderApiFormatInheritance::OAuthOrBearer,
+        enable_format_conversion_by_default: true,
+        supports_model_fetch: false,
+        ..STANDARD_RUNTIME_POLICY
+    },
+};
+
 const CLAUDE_CODE_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
     provider_type: "claude_code",
     version: 2,
@@ -534,6 +553,7 @@ pub fn provider_runtime_policy(provider_type: &str) -> ProviderRuntimePolicy {
 pub fn fixed_provider_template(provider_type: &str) -> Option<&'static FixedProviderTemplate> {
     match provider_type.trim().to_ascii_lowercase().as_str() {
         "claude_code" => Some(&CLAUDE_CODE_FIXED_PROVIDER_TEMPLATE),
+        "clinepass" => Some(&CLINEPASS_FIXED_PROVIDER_TEMPLATE),
         "codex" => Some(&CODEX_FIXED_PROVIDER_TEMPLATE),
         "chatgpt_web" => Some(&CHATGPT_WEB_FIXED_PROVIDER_TEMPLATE),
         "kiro" => Some(&KIRO_FIXED_PROVIDER_TEMPLATE),
@@ -691,6 +711,18 @@ mod tests {
         provider_type_supports_local_same_format_transport, FixedProviderEndpointConfigValue,
         ADMIN_PROVIDER_OAUTH_TEMPLATE_TYPES,
     };
+
+    #[test]
+    fn clinepass_fixed_provider_uses_chat_endpoint_with_conversion_enabled() {
+        let template = fixed_provider_template("ClinePass").unwrap();
+        assert_eq!(template.provider_type, "clinepass");
+        assert_eq!(template.base_url, "https://api.cline.bot/api/v1");
+        assert_eq!(template.endpoints.len(), 1);
+        assert_eq!(template.endpoints[0].api_format, "openai:chat");
+        assert!(template.runtime_policy.enable_format_conversion_by_default);
+        assert!(template.runtime_policy.supports_local_openai_chat_transport);
+        assert!(provider_type_admin_oauth_template("clinepass").is_none());
+    }
 
     #[test]
     fn claude_code_fixed_provider_uses_messages_api_root_and_conversion_default() {

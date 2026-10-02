@@ -1130,6 +1130,7 @@ fn grok_stream_terminal_summary(
         response_id: None,
         model: plan.model_name.clone(),
         provider_actual_service_tier: None,
+        provider_channel: None,
         observed_finish: true,
         unknown_event_count: 0,
         parser_error: None,

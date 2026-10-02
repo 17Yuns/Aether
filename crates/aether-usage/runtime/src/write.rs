@@ -184,6 +184,7 @@ pub struct StreamTerminalUsagePayloadSeed {
     pub client_response_body_state: Option<UsageBodyCaptureState>,
     pub standardized_usage: Option<StandardizedUsage>,
     pub provider_actual_service_tier: Option<String>,
+    pub provider_channel: Option<String>,
     pub observed_stream_finish: Option<bool>,
     pub terminal_error_message: Option<String>,
     pub capture_metadata: Option<Value>,
@@ -1014,6 +1015,10 @@ pub fn build_stream_terminal_usage_payload_seed(
             .terminal_summary
             .as_ref()
             .and_then(|summary| summary.provider_actual_service_tier.clone()),
+        provider_channel: payload
+            .terminal_summary
+            .as_ref()
+            .and_then(|summary| summary.provider_channel.clone()),
         observed_stream_finish,
         terminal_error_message,
         capture_metadata: build_payload_body_capture_metadata(
@@ -1151,6 +1156,7 @@ pub fn build_stream_terminal_usage_seed(
         mut client_response_body_state,
         standardized_usage,
         provider_actual_service_tier,
+        provider_channel,
         observed_stream_finish,
         terminal_error_message,
         capture_metadata,
@@ -1258,6 +1264,11 @@ pub fn build_stream_terminal_usage_seed(
     let request_metadata = attach_provider_actual_service_tier_metadata(
         request_metadata,
         provider_actual_service_tier.as_deref(),
+    );
+    let request_metadata = crate::request_metadata::attach_clinepass_response_metadata(
+        request_metadata,
+        None,
+        provider_channel.as_deref(),
     );
 
     TerminalUsageSeed {
@@ -3564,6 +3575,60 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn clinepass_sync_audit_keeps_usage_and_channel_when_body_capture_is_disabled() {
+        let plan = ExecutionPlan {
+            request_id: "clinepass-request".to_string(),
+            candidate_id: None,
+            provider_name: Some("ClinePass".to_string()),
+            provider_id: "provider".to_string(),
+            endpoint_id: "endpoint".to_string(),
+            key_id: "key".to_string(),
+            method: "POST".to_string(),
+            url: "https://api.cline.bot/api/v1/chat/completions".to_string(),
+            headers: BTreeMap::new(),
+            content_type: None,
+            content_encoding: None,
+            body: RequestBody::from_json(json!({"model":"test"})),
+            stream: false,
+            client_api_format: "claude:messages".to_string(),
+            provider_api_format: "openai:chat".to_string(),
+            model_name: Some("test".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        };
+        let payload = GatewaySyncReportRequest {
+            trace_id: "trace".to_string(),
+            report_kind: "claude_chat_sync_success".to_string(),
+            report_context: Some(
+                json!({"provider_type":"clinepass","client_api_format":"claude:messages","provider_api_format":"openai:chat"}),
+            ),
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body_json: Some(
+                json!({"provider":"baseten","choices":[{"message":{"provider_metadata":{"baseten":{"promptCacheHitTokens":70,"promptCacheMissTokens":30}}}}],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_tokens_details":{"cache_write_tokens":12}}}),
+            ),
+            client_body_json: None,
+            body_base64: None,
+            telemetry: None,
+        };
+        let mut event =
+            build_sync_terminal_usage_event(&plan, payload.report_context.as_ref(), &payload)
+                .unwrap();
+        crate::apply_usage_body_capture_policy_to_event(
+            crate::UsageBodyCapturePolicy::default(),
+            &mut event,
+        );
+        assert_eq!(event.data.cache_creation_input_tokens, Some(12));
+        assert_eq!(event.data.cache_read_input_tokens, Some(70));
+        assert_eq!(
+            event.data.request_metadata.as_ref().unwrap()["clinepass_channel"],
+            "baseten"
+        );
+        assert!(event.data.response_body.is_none());
+    }
+
+    #[test]
     fn extracts_openai_usage_tokens() {
         let tokens = extract_token_counts_from_json(&json!({
             "usage": {
@@ -4561,6 +4626,7 @@ mod tests {
                 response_id: Some("resp_cancel_summary_1".to_string()),
                 model: Some("gpt-5.4".to_string()),
                 provider_actual_service_tier: None,
+                provider_channel: None,
                 observed_finish: true,
                 unknown_event_count: 0,
                 parser_error: None,
@@ -4768,6 +4834,7 @@ mod tests {
                 response_id: Some("resp_summary_1".to_string()),
                 model: Some("gpt-5.4".to_string()),
                 provider_actual_service_tier: Some("Default".to_string()),
+                provider_channel: None,
                 observed_finish: true,
                 unknown_event_count: 0,
                 parser_error: None,
@@ -5232,6 +5299,7 @@ mod tests {
                 response_id: Some("resp_image_estimate_1".to_string()),
                 model: Some("gpt-image-2".to_string()),
                 provider_actual_service_tier: None,
+                provider_channel: None,
                 observed_finish: true,
                 unknown_event_count: 0,
                 parser_error: None,
@@ -5487,6 +5555,7 @@ mod tests {
                 response_id: Some("resp_123".to_string()),
                 model: Some("gpt-5.5".to_string()),
                 provider_actual_service_tier: None,
+                provider_channel: None,
                 observed_finish: true,
                 unknown_event_count: 0,
                 parser_error: None,

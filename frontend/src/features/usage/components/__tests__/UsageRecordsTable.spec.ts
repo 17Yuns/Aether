@@ -188,6 +188,21 @@ afterEach(() => {
 })
 
 describe('UsageRecordsTable', () => {
+  it.each([true, false])('labels cache writes and reads, with channel visibility limited to admin=%s', (isAdmin) => {
+    const root = mountUsageRecordsTable([buildRecord({
+      clinepass_channel: 'baseten',
+      cache_creation_input_tokens: 23,
+      cache_read_input_tokens: 47,
+    })], { isAdmin })
+    expect(root.textContent).toContain('缓存写入 23')
+    expect(root.textContent).toContain('缓存读取 47')
+    if (isAdmin) expect(root.textContent).toContain('渠道商: baseten')
+    else {
+      expect(root.textContent).not.toContain('baseten')
+      expect(root.querySelector('[data-usage-provider-channel]')).toBeNull()
+    }
+  })
+
   it('shows output TPS after the request completes', () => {
     const root = mountUsageRecordsTable([buildRecord()])
 

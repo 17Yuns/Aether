@@ -12219,6 +12219,7 @@ mod tests {
                 standardized_usage: Some(runtime_usage),
                 model: Some("gpt-5.5".to_string()),
                 provider_actual_service_tier: Some("priority".to_string()),
+                provider_channel: None,
                 unknown_event_count: 1,
                 ..ExecutionStreamTerminalSummary::default()
             }),
@@ -12226,6 +12227,7 @@ mod tests {
                 standardized_usage: Some(observed_usage),
                 response_id: Some("resp_123".to_string()),
                 provider_actual_service_tier: Some("default".to_string()),
+                provider_channel: None,
                 observed_finish: true,
                 unknown_event_count: 2,
                 ..ExecutionStreamTerminalSummary::default()

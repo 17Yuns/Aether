@@ -66,6 +66,9 @@
                   <SelectItem value="kiro">
                     Kiro
                   </SelectItem>
+                  <SelectItem value="clinepass">
+                    ClinePass
+                  </SelectItem>
                   <SelectItem value="windsurf">
                     Windsurf
                   </SelectItem>
@@ -101,6 +104,9 @@
                   </SelectItem>
                   <SelectItem value="kiro">
                     Kiro
+                  </SelectItem>
+                  <SelectItem value="clinepass">
+                    ClinePass
                   </SelectItem>
                   <SelectItem value="windsurf">
                     Windsurf
@@ -274,6 +280,12 @@
           />
         </div>
 
+        <ClinePassChannelFilters
+          v-if="form.provider_type === 'clinepass'"
+          v-model="form.clinepass"
+          :provider-id="provider?.id"
+        />
+
         <div
           class="flex items-center justify-between p-3 border rounded-lg bg-muted/50"
           data-testid="responses-websocket-setting"
@@ -342,6 +354,8 @@ import {
   Switch,
 } from '@/components/ui'
 import { Server, SquarePen } from 'lucide-vue-next'
+import ClinePassChannelFilters from './ClinePassChannelFilters.vue'
+import type { ClinePassConfig } from '@/api/endpoints'
 import HelpHint from '@/components/common/HelpHint.vue'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
@@ -416,6 +430,7 @@ const form = ref({
   kiro_simulated_cache_enabled: false,
   // Responses WebSocket 配置
   responses_websocket_enabled: false,
+  clinepass: { models: {} } as ClinePassConfig,
 })
 
 // 重置表单
@@ -444,6 +459,7 @@ function resetForm() {
     kiro_simulated_cache_enabled: false,
     // Responses WebSocket 配置
     responses_websocket_enabled: false,
+    clinepass: { models: {} } as ClinePassConfig,
   }
 }
 
@@ -476,6 +492,7 @@ function loadProviderData() {
     kiro_simulated_cache_enabled: props.provider.kiro_simulated_cache_enabled ?? false,
     // Responses WebSocket 配置
     responses_websocket_enabled: props.provider.responses_websocket_enabled ?? false,
+    clinepass: JSON.parse(JSON.stringify(props.provider.clinepass ?? { models: {} })) as ClinePassConfig,
   }
 }
 
@@ -524,6 +541,9 @@ const handleSubmit = async () => {
       pool_advanced: form.value.pool_mode_enabled
         ? (currentPoolAdvanced ?? {})
         : null,
+      ...(form.value.provider_type === 'clinepass'
+        ? { config: { clinepass: form.value.clinepass } }
+        : {}),
       ...(form.value.provider_type === 'codex'
         ? {
             codex_fingerprint_convergence_enabled: form.value.codex_fingerprint_convergence_enabled,

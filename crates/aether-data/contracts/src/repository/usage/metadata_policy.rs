@@ -73,6 +73,26 @@ pub fn sanitize_usage_request_metadata_object(source: &Map<String, Value>) -> Op
     }
 
     insert_token(source, &mut target, "trace_id", 128);
+    insert_token(source, &mut target, "provider_type", 64);
+    if source.get("provider_type").and_then(Value::as_str) == Some("clinepass") {
+        if let Some(channel) = source
+            .get("clinepass_channel")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|channel| {
+                !channel.is_empty()
+                    && channel.len() <= 128
+                    && channel
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._:-/ ".contains(&byte))
+            })
+        {
+            target.insert(
+                "clinepass_channel".to_string(),
+                Value::String(channel.to_string()),
+            );
+        }
+    }
     insert_ip_address(source, &mut target, "client_ip");
     insert_client_family(source, &mut target);
     for key in [

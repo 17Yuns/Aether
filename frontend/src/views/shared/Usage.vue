@@ -648,6 +648,9 @@ async function pollActiveRequests() {
         record.service_tier = typeof update.service_tier === 'string' && update.service_tier.trim()
           ? update.service_tier
           : null
+        if (isAdminPage.value) {
+          record.clinepass_channel = 'clinepass_channel' in update && typeof update.clinepass_channel === 'string' ? update.clinepass_channel : null
+        }
         record.actual_service_tier = typeof update.actual_service_tier === 'string' && update.actual_service_tier.trim()
           ? update.actual_service_tier
           : null
@@ -1291,6 +1294,9 @@ function handleDetailRequestState(update: {
   }
   if ('serviceTier' in update) {
     record.service_tier = typeof update.serviceTier === 'string' ? update.serviceTier : null
+  }
+  if ('clinepassChannel' in update && isAdminPage.value) {
+    record.clinepass_channel = typeof update.clinepassChannel === 'string' ? update.clinepassChannel : null
   }
   if ('actualServiceTier' in update) {
     record.actual_service_tier = typeof update.actualServiceTier === 'string'

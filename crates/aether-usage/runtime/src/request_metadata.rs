@@ -237,6 +237,7 @@ pub(crate) fn attach_provider_response_body_metadata(
     metadata: Option<Value>,
     provider_response_body: Option<&Value>,
 ) -> Option<Value> {
+    let metadata = attach_clinepass_response_metadata(metadata, provider_response_body, None);
     if metadata
         .as_ref()
         .and_then(Value::as_object)
@@ -337,6 +338,7 @@ pub(crate) fn refresh_provider_response_body_metadata(
     metadata: Option<Value>,
     provider_response_body: Option<&Value>,
 ) -> Option<Value> {
+    let metadata = attach_clinepass_response_metadata(metadata, provider_response_body, None);
     let is_capture_placeholder = provider_response_body
         .and_then(Value::as_object)
         .is_some_and(|body| {
@@ -389,8 +391,67 @@ pub(crate) fn attach_provider_actual_service_tier_metadata(
     (!object.is_empty()).then_some(Value::Object(object))
 }
 
+pub(crate) fn attach_clinepass_response_metadata(
+    metadata: Option<Value>,
+    body: Option<&Value>,
+    channel: Option<&str>,
+) -> Option<Value> {
+    if metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("provider_type"))
+        .and_then(Value::as_str)
+        != Some("clinepass")
+    {
+        return metadata;
+    }
+    let parsed = body
+        .map(aether_ai_formats::clinepass::parse_clinepass_response)
+        .unwrap_or_default();
+    let Some(channel) = channel
+        .or(parsed.channel.as_deref())
+        .map(str::trim)
+        .filter(|channel| {
+            !channel.is_empty() && channel.len() <= 128 && !channel.chars().any(char::is_control)
+        })
+    else {
+        return metadata;
+    };
+    let mut metadata = metadata
+        .and_then(|metadata| metadata.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "clinepass_channel".to_string(),
+        Value::String(channel.to_string()),
+    );
+    Some(Value::Object(metadata))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clinepass_channel_survives_metadata_projection_without_body_capture() {
+        let body = serde_json::json!({"provider":"baseten"});
+        let metadata = super::attach_provider_response_body_metadata(
+            Some(serde_json::json!({"provider_type":"clinepass"})),
+            Some(&body),
+        );
+        let metadata = super::sanitize_usage_request_metadata(metadata).unwrap();
+        assert_eq!(metadata["clinepass_channel"], "baseten");
+        let stream_metadata =
+            super::attach_clinepass_response_metadata(Some(metadata), None, Some("Google Vertex"));
+        assert_eq!(
+            super::sanitize_usage_request_metadata(stream_metadata).unwrap()["clinepass_channel"],
+            "Google Vertex"
+        );
+        assert!(super::attach_clinepass_response_metadata(
+            Some(serde_json::json!({"provider_type":"custom"})),
+            Some(&body),
+            None
+        )
+        .unwrap()
+        .get("clinepass_channel")
+        .is_none());
+    }
     use aether_contracts::{ExecutionPlan, RequestBody};
     use aether_data_contracts::repository::usage::UsageBodyCaptureState;
     use serde_json::{json, Value};

@@ -775,6 +775,7 @@ impl OpenAiImageStreamTerminalState {
                 .clone()
                 .or_else(|| image_bridge_model(Some(report_context))),
             provider_actual_service_tier: None,
+            provider_channel: None,
             observed_finish: self.observed_finish,
             unknown_event_count: 0,
             parser_error: self.parser_error.clone(),

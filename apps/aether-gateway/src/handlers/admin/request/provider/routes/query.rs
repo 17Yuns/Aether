@@ -56,6 +56,18 @@ impl<'a> AdminAppState<'a> {
                 build_admin_provider_query_models_response(self, &payload).await?,
             )),
             "test_model" => {
+                if payload
+                    .get("clinepass_probe")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    return Ok(Some(
+                        crate::handlers::admin::provider::query::models::probe_clinepass_channels(
+                            self, &payload,
+                        )
+                        .await?,
+                    ));
+                }
                 let Some(_provider_id) = provider_query_extract_provider_id(&payload) else {
                     log_admin_provider_query_validation_failure(
                         request_context,

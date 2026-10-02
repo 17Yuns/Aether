@@ -1870,6 +1870,27 @@ mod tests {
     }
 
     #[test]
+    fn clinepass_user_records_keep_cache_counts_private_from_upstream_channel() {
+        let item = StoredRequestUsageAudit {
+            cache_creation_input_tokens: 23,
+            cache_read_input_tokens: 47,
+            request_metadata: Some(
+                json!({"provider_type":"clinepass","clinepass_channel":"baseten"}),
+            ),
+            ..sample_usage("completed")
+        };
+        for payload in [
+            build_users_me_usage_record_payload(&item, false, &BTreeMap::new(), false),
+            build_users_me_usage_active_payload(&item),
+        ] {
+            assert_eq!(payload["cache_creation_input_tokens"], 23);
+            assert_eq!(payload["cache_read_input_tokens"], 47);
+            assert!(payload.get("clinepass_channel").is_none());
+            assert!(!payload.to_string().contains("baseten"));
+        }
+    }
+
+    #[test]
     fn user_usage_record_payload_rehydrates_cache_creation_total_from_classified_fields() {
         let item = StoredRequestUsageAudit {
             cache_creation_input_tokens: 0,

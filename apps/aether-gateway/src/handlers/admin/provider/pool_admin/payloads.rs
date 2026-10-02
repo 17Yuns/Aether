@@ -918,6 +918,27 @@ fn admin_pool_build_account_quota(
     })?;
 
     match normalized_provider_type.as_str() {
+        "clinepass" => {
+            let windows = quota_snapshot
+                .get("windows")
+                .and_then(serde_json::Value::as_array)?;
+            let parts: Vec<_> = [("five_hour", "5h"), ("weekly", "7d"), ("monthly", "30d")]
+                .into_iter()
+                .map(|(code, label)| {
+                    let remaining = windows
+                        .iter()
+                        .find(|window| window["code"] == code)
+                        .and_then(|window| window["remaining_ratio"].as_f64());
+                    match remaining {
+                        Some(ratio) => {
+                            format!("{label} 剩余 {:.1}%", ratio.clamp(0.0, 1.0) * 100.0)
+                        }
+                        None => format!("{label} 额度未知"),
+                    }
+                })
+                .collect();
+            return Some(parts.join(" | "));
+        }
         "codex" => {
             if let Some(account_quota) =
                 admin_pool_build_codex_account_quota_from_snapshot(quota_snapshot)

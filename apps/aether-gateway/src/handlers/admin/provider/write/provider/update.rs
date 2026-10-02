@@ -371,6 +371,10 @@ pub(crate) async fn build_admin_update_provider_record(
             .ok_or_else(|| "responses_websocket_enabled 必须是布尔值".to_string())?;
         set_responses_websocket_enabled(&mut config_map, enabled)?;
     }
+    if let Some(value) = config_map.get("clinepass") {
+        let normalized = aether_provider_transport::clinepass::normalize_clinepass_config(value)?;
+        config_map.insert("clinepass".to_string(), normalized);
+    }
     validate_responses_websocket_config(&config_map)?;
 
     updated.config = (!config_map.is_empty()).then_some(serde_json::Value::Object(config_map));

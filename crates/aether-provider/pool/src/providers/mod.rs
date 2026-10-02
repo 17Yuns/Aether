@@ -1,6 +1,7 @@
 pub mod antigravity;
 pub mod chatgpt_web;
 pub mod claude_code;
+pub mod clinepass;
 pub mod codex;
 pub mod default;
 pub mod gemini_cli;
@@ -25,6 +26,9 @@ pub use claude_code::ClaudeCodeProviderPoolAdapter;
 pub use claude_code::{
     build_claude_code_pool_quota_request, CLAUDE_CODE_OAUTH_BETA, CLAUDE_CODE_OAUTH_USAGE_URL,
     CLAUDE_CODE_USAGE_USER_AGENT,
+};
+pub use clinepass::{
+    build_clinepass_pool_quota_request, parse_clinepass_quota, ClinePassProviderPoolAdapter,
 };
 pub use codex::CodexProviderPoolAdapter;
 pub use codex::{

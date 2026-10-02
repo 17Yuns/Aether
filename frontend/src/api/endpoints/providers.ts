@@ -229,6 +229,7 @@ export async function getProviderDeleteTask(
  * 测试模型连接性
  */
 export interface TestModelRequest {
+  clinepass_probe?: boolean
   provider_id: string
   model_name: string
   api_key_id?: string
@@ -246,6 +247,7 @@ export interface TestModelRequest {
 }
 
 export interface TestModelResponse {
+  clinepass_probe?: { available_channels: string[]; pipeline: '' | 'planner' | 'direct'; pinnable: boolean; pin_reason: string | null }
   success: boolean
   error?: string
   attempts?: TestAttemptDetail[]

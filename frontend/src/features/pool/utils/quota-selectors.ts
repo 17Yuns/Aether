@@ -52,6 +52,6 @@ export function hasNoFiveHourLimit(accountQuota: string | null | undefined): boo
 export function hasNoWeeklyLimit(accountQuota: string | null | undefined): boolean {
   return getQuotaSegments(accountQuota)
     .filter((segment) => !isSparkQuotaSegment(segment))
-    .filter((segment) => /周|weekly|week/.test(segment))
+    .filter((segment) => /周|weekly|week|7d/.test(segment))
     .some(isDepletedQuotaSegment)
 }

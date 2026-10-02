@@ -419,7 +419,7 @@ const FALLBACK_PRESET_DEFS: PoolPresetMeta[] = [
     label: '额度刷新优先',
     description: '优先选即将刷新额度的账号',
     evidence_hint: '依据账号额度重置倒计时（next_reset / reset_seconds）',
-    providers: ['codex', 'grok', 'kiro', 'windsurf', 'xai'],
+    providers: ['codex', 'grok', 'kiro', 'windsurf', 'xai', 'clinepass'],
     default_enabled_providers: ['codex', 'windsurf'],
     modes: null,
     default_mode: null,

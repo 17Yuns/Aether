@@ -326,7 +326,13 @@
                   v-if="showAccountQuotaColumn"
                   class="py-3 align-top"
                 >
+                  <ClinePassQuotaPanel
+                    v-if="selectedProviderType === 'clinepass'"
+                    :quota="key.status_snapshot?.quota"
+                    :metadata="key.upstream_metadata?.clinepass"
+                  />
                   <PoolKeyQuotaPanel
+                    v-else
                     :items="quotaProgressDisplayMap[key.key_id] || []"
                     :account-quota-text="keyUiStateMap[key.key_id]?.accountQuotaText"
                     :fallback-text="keyUiStateMap[key.key_id]?.quotaFallbackText"
@@ -708,8 +714,13 @@
                 </div>
               </div>
 
+              <ClinePassQuotaPanel
+                v-if="showAccountQuotaColumn && selectedProviderType === 'clinepass'"
+                :quota="key.status_snapshot?.quota"
+                :metadata="key.upstream_metadata?.clinepass"
+              />
               <PoolKeyQuotaPanel
-                v-if="showAccountQuotaColumn"
+                v-else-if="showAccountQuotaColumn"
                 :items="quotaProgressDisplayMap[key.key_id] || []"
                 :account-quota-text="keyUiStateMap[key.key_id]?.accountQuotaText"
                 :fallback-text="keyUiStateMap[key.key_id]?.quotaFallbackText"
@@ -1029,6 +1040,8 @@
 </template>
 
 <script setup lang="ts">
+import ClinePassQuotaPanel from '@/features/providers/components/ClinePassQuotaPanel.vue'
+import { getClinePassQuotaWindows } from '@/features/providers/utils/clinepassQuota'
 import { ref, computed, watch, onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import {
   Upload,
@@ -1701,6 +1714,7 @@ const showAccountQuotaColumn = computed(() => {
     || selectedProviderType.value === 'gemini_cli'
     || selectedProviderType.value === 'kiro'
     || selectedProviderType.value === 'windsurf'
+    || selectedProviderType.value === 'clinepass'
     || selectedProviderType.value === 'antigravity'
     || selectedProviderType.value === 'grok'
     || selectedProviderType.value === 'chatgpt_web'
@@ -2152,6 +2166,7 @@ const quotaRefreshSupported = computed(() => {
     || selectedProviderType.value === 'kiro'
     || selectedProviderType.value === 'gemini_cli'
     || selectedProviderType.value === 'windsurf'
+    || selectedProviderType.value === 'clinepass'
     || selectedProviderType.value === 'antigravity'
     || selectedProviderType.value === 'grok'
     || selectedProviderType.value === 'chatgpt_web'
@@ -3765,6 +3780,14 @@ function buildQuotaProgressItemsFromSnapshot(key: PoolKeyDetail): QuotaProgressI
   if (!quota) return []
 
   const providerType = getQuotaSnapshotProviderType(key)
+
+  if (providerType === 'clinepass') {
+    return getClinePassQuotaWindows(quota).flatMap(window => window.remainingPercent == null ? [] : [{
+      label: window.label, remainingPercent: window.remainingPercent,
+      resetAtSeconds: window.resetAt, updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+      allowDynamicReset: true,
+    }])
+  }
 
   if (providerType === 'codex') {
     const quotaResetAtSeconds = getQuotaSnapshotResetAtSeconds(quota)

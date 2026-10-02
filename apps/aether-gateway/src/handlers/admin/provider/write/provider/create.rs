@@ -184,6 +184,10 @@ pub(crate) async fn build_admin_create_provider_record(
     if let Some(enabled) = payload.responses_websocket_enabled {
         set_responses_websocket_enabled(&mut config_map, enabled)?;
     }
+    if let Some(value) = config_map.get("clinepass") {
+        let normalized = aether_provider_transport::clinepass::normalize_clinepass_config(value)?;
+        config_map.insert("clinepass".to_string(), normalized);
+    }
     validate_responses_websocket_config(&config_map)?;
     let config = (!config_map.is_empty()).then_some(serde_json::Value::Object(config_map));
     crate::provider_transport::validate_anthropic_compatibility_profile_config(config.as_ref())

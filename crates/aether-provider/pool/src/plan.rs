@@ -11,7 +11,9 @@ pub fn derive_plan_tier(
             .encrypted_auth_config
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
-    if !provider_pool_auth_managed(key, provider_type, has_auth_config) {
+    if !provider_type.eq_ignore_ascii_case("clinepass")
+        && !provider_pool_auth_managed(key, provider_type, has_auth_config)
+    {
         return None;
     }
 

@@ -19,6 +19,7 @@ export interface UsageRecord {
   requested_reasoning_effort?: string | null
   reasoning_effort?: string | null
   service_tier?: string | null
+  clinepass_channel?: string | null
   actual_service_tier?: string | null
   response_model?: string | null
   input_tokens: number
@@ -624,7 +625,8 @@ export const usageApi = {
       requested_reasoning_effort?: string | null
       reasoning_effort?: string | null
       service_tier?: string | null
-      actual_service_tier?: string | null
+      clinepass_channel?: string | null
+  actual_service_tier?: string | null
       image_progress?: ImageProgress | null
     }>
   }> {
@@ -692,7 +694,8 @@ export const usageApi = {
       requested_reasoning_effort?: string | null
       reasoning_effort?: string | null
       service_tier?: string | null
-      actual_service_tier?: string | null
+      clinepass_channel?: string | null
+  actual_service_tier?: string | null
       image_progress?: ImageProgress | null
     }>
   }>('/api/admin/usage/active', { params })

@@ -201,6 +201,7 @@ export class RequestBodyProtocolError extends Error {
 }
 
 export interface RequestDetail {
+  clinepass_channel?: string | null
   id: string // UUID
   request_id: string
   user: {

@@ -636,6 +636,11 @@
                         </ProviderQuotaProgressRow>
                       </div>
                     </div>
+                    <ClinePassQuotaPanel
+                      v-if="provider.provider_type === 'clinepass'"
+                      :quota="key.status_snapshot?.quota"
+                      :metadata="key.upstream_metadata?.clinepass"
+                    />
                     <!-- Windsurf 上游额度信息 -->
                     <div
                       v-if="provider.provider_type === 'windsurf' && (hasWindsurfQuotaDisplayData(key) || isWindsurfUnavailableKey(key) || isWindsurfExhaustedKey(key))"
@@ -1092,6 +1097,7 @@ import ModelMappingTab from '@/features/providers/components/provider-tabs/Model
 import EndpointFormDialog from '@/features/providers/components/EndpointFormDialog.vue'
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
 import AlertDialog from '@/components/common/AlertDialog.vue'
+import ClinePassQuotaPanel from './ClinePassQuotaPanel.vue'
 import AntigravityQuotaDialog from '@/features/providers/components/AntigravityQuotaDialog.vue'
 import FailoverRulesDialog from '@/features/providers/components/FailoverRulesDialog.vue'
 import ProviderDetailHeader from '@/features/providers/components/ProviderDetailHeader.vue'
@@ -3072,10 +3078,14 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
   if (refreshingQuota.value) return false
 
   const providerType = provider.value?.provider_type
-  if (providerType !== 'codex' && providerType !== 'claude_code' && providerType !== 'gemini_cli' && providerType !== 'antigravity' && providerType !== 'kiro' && providerType !== 'windsurf' && providerType !== 'chatgpt_web' && providerType !== 'grok' && providerType !== 'xai') return false
+  if (providerType !== 'codex' && providerType !== 'claude_code' && providerType !== 'gemini_cli' && providerType !== 'antigravity' && providerType !== 'kiro' && providerType !== 'windsurf' && providerType !== 'chatgpt_web' && providerType !== 'grok' && providerType !== 'xai' && providerType !== 'clinepass') return false
 
   // 检查是否需要刷新
   let shouldRefresh = false
+  if (providerType === 'clinepass') {
+    const now = Date.now() / 1000
+    shouldRefresh = allKeys.value.some(({ key }) => key.is_active && (!key.status_snapshot?.quota?.updated_at || now - Number(key.status_snapshot.quota.updated_at) > 60))
+  }
   if (providerType === 'codex') {
     shouldRefresh = shouldAutoRefreshCodexQuota()
   } else if (providerType === 'claude_code') {
@@ -3097,7 +3107,7 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
   }
   if (!shouldRefresh) return false
 
-  let hadCachedQuota = false
+  let hadCachedQuota = providerType === 'clinepass' && allKeys.value.some(({ key }) => key.is_active && !!key.status_snapshot?.quota?.windows?.some(window => typeof window.remaining_ratio === 'number'))
   if (providerType === 'codex') {
     hadCachedQuota = allKeys.value.some(({ key }) => key.is_active && hasCodexQuotaDisplayData(key))
   } else if (providerType === 'claude_code') {

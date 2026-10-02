@@ -471,6 +471,11 @@ export function getQuotaSnapshotFallbackText(
 
   const providerType = getQuotaProviderType(quota, fallbackProviderType)
   switch (providerType) {
+    case 'clinepass':
+      return ([['five_hour', '5h'], ['weekly', '7d'], ['monthly', '30d']] as const).map(([code, label]) => {
+        const remaining = getQuotaWindowRemainingPercent(getQuotaWindow(quota, code))
+        return remaining == null ? `${label} 额度未知` : `${label} 剩余 ${formatPercent(remaining)}`
+      }).join(' | ')
     case 'codex':
       return getCodexQuotaText(quota)
     case 'kiro':

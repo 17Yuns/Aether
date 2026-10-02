@@ -344,6 +344,11 @@
           </span>
           <span class="shrink-0 text-muted-foreground/40">·</span>
           <span class="min-w-0 truncate">{{ formatRecordProviderSegment(record) }}</span>
+          <span
+            v-if="record.clinepass_channel"
+            class="truncate"
+            data-usage-provider-channel
+          >渠道商: {{ record.clinepass_channel }}</span>
           <!-- 手机与桌面保持相同的标记优先级：发生故障转移时优先显示转移标记。 -->
           <Shuffle
             v-if="record.has_fallback"
@@ -413,15 +418,19 @@
               class="ml-1 text-muted-foreground"
               title="上游未提供可验证的 token/费用用量"
             >不可用</span>
-            <template v-if="record.usage_available !== false && hasRecordCacheTokens(record)">
-              <span class="text-muted-foreground"> | </span>
-              <span>{{ formatOptionalTokens(getRecordCacheReadTokens(record)) }} / {{ formatOptionalTokens(getRecordCacheCreationTokens(record)) }}</span>
-            </template>
             <template v-if="record.usage_available !== false && ((record.input_audio_tokens || 0) > 0 || (record.output_audio_tokens || 0) > 0)">
               <span class="text-muted-foreground"> | 音频 </span>
               <span>{{ formatOptionalTokens(record.input_audio_tokens) }} / {{ formatOptionalTokens(record.output_audio_tokens) }}</span>
             </template>
           </span>
+        </div>
+        <div
+          v-if="record.usage_available !== false"
+          class="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground tabular-nums"
+          data-usage-cache-tokens
+        >
+          <span>缓存写入 {{ formatTokens(getRecordCacheCreationTokens(record)) }}</span>
+          <span>缓存读取 {{ formatTokens(getRecordCacheReadTokens(record)) }}</span>
         </div>
       </div>
     </div>
@@ -777,6 +786,12 @@
               <div class="flex min-w-0 flex-col text-xs gap-0.5">
                 <span class="truncate">{{ record.provider }}</span>
                 <span
+                  v-if="record.clinepass_channel"
+                  class="truncate text-muted-foreground"
+                  :title="record.clinepass_channel"
+                  data-usage-provider-channel
+                >渠道商: {{ record.clinepass_channel }}</span>
+                <span
                   v-if="record.provider_key_name"
                   class="text-muted-foreground truncate"
                   :title="record.provider_key_name"
@@ -933,26 +948,12 @@
                   {{ formatTokens(record.output_tokens || 0) }}
                 </span>
               </div>
-              <div class="mt-0.5 grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-1 text-xs leading-tight tabular-nums text-muted-foreground">
-                <span
-                  class="justify-self-end whitespace-nowrap text-right"
-                  :class="[
-                    hasPositiveTokens(getRecordCacheReadTokens(record)) ? 'text-foreground/70' : ''
-                  ]"
-                >
-                  {{ formatOptionalTokens(getRecordCacheReadTokens(record)) }}
-                </span>
-                <span class="justify-self-center">
-                  /
-                </span>
-                <span
-                  class="justify-self-start whitespace-nowrap text-left"
-                  :class="[
-                    hasPositiveTokens(getRecordCacheCreationTokens(record)) ? 'text-foreground/70' : ''
-                  ]"
-                >
-                  {{ formatOptionalTokens(getRecordCacheCreationTokens(record)) }}
-                </span>
+              <div
+                class="mt-0.5 space-y-0.5 text-[10px] leading-tight tabular-nums text-muted-foreground"
+                data-usage-cache-tokens
+              >
+                <div>缓存写入 {{ formatTokens(getRecordCacheCreationTokens(record)) }}</div>
+                <div>缓存读取 {{ formatTokens(getRecordCacheReadTokens(record)) }}</div>
               </div>
               <div
                 v-if="(record.input_audio_tokens || 0) > 0 || (record.output_audio_tokens || 0) > 0"

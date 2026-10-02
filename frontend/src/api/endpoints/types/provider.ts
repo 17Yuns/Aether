@@ -197,7 +197,28 @@ export interface ResponsesWebSocketProviderConfig {
   enabled: boolean
 }
 
+export interface ClinePassModelFilter {
+  only: string[]
+  exclude: string[]
+  available_channels: string[]
+  pipeline?: '' | 'planner' | 'direct'
+  pinnable?: boolean | null
+  pin_reason?: string | null
+}
+
+export interface ClinePassConfig {
+  models: Record<string, ClinePassModelFilter>
+}
+
+export interface ClinePassUpstreamMetadata {
+  plan_type?: string | null
+  active?: boolean | null
+  current_period_end?: string | null
+  updated_at?: number
+}
+
 export interface ProviderConfig {
+  clinepass?: ClinePassConfig
   chat_pii_redaction?: ChatPiiRedactionProviderConfig
   codex?: CodexProviderConfig
   responses_websocket?: ResponsesWebSocketProviderConfig
@@ -543,6 +564,7 @@ export interface ClaudeCodeUpstreamMetadata {
 }
 
 export interface UpstreamMetadata {
+  clinepass?: ClinePassUpstreamMetadata
   codex?: CodexUpstreamMetadata
   claude_code?: ClaudeCodeUpstreamMetadata
   antigravity?: AntigravityUpstreamMetadata
@@ -790,7 +812,7 @@ export interface HealthRelatedMonitorResponse {
   related_providers: HealthRelatedMonitor[]
 }
 
-export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro' | 'grok' | 'xai' | 'windsurf' | 'vertex_ai'
+export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro' | 'grok' | 'xai' | 'windsurf' | 'vertex_ai' | 'clinepass'
 
 export interface ClaudeCodeAdvancedConfig {
   // 会话数量控制：null/undefined 表示不限制
@@ -918,6 +940,7 @@ export interface FailoverRulesConfig {
 }
 
 export interface ProviderWithEndpointsSummary {
+  clinepass?: ClinePassConfig | null
   id: string
   name: string
   provider_type?: ProviderType

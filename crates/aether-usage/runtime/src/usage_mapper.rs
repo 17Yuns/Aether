@@ -42,6 +42,17 @@ impl UsageMapper {
         if is_openai_image_api(api_format) {
             apply_openai_image_response_dimensions(response, &mut usage);
         }
+        if api_family(api_format) == "openai" {
+            let facts = aether_ai_formats::clinepass::parse_clinepass_response(response);
+            if let Some(read) = facts.cache_read_tokens {
+                usage.cache_read_tokens = read;
+                if usage.input_tokens == 0 {
+                    if let Some(miss) = facts.cache_miss_tokens {
+                        usage.input_tokens = read.saturating_add(miss);
+                    }
+                }
+            }
+        }
         usage
     }
 }
@@ -347,6 +358,7 @@ fn resolve_usage_value<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::UsageMapper;
     use super::{map_usage, map_usage_from_response};
 
     #[test]
@@ -396,6 +408,28 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, 2);
         assert_eq!(usage.cache_read_tokens, 3);
         assert_eq!(usage.reasoning_tokens, 1);
+    }
+
+    #[test]
+    fn clinepass_reads_cache_metadata_without_counting_misses_as_writes() {
+        let response = serde_json::json!({
+            "provider": "deepseek",
+            "choices": [{"message": {"provider_metadata": {"deepseek": {"promptCacheHitTokens": 70, "promptCacheMissTokens": 30}}}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12}}
+        });
+        let usage = UsageMapper::map_from_response(&response, "openai:chat");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.cache_read_tokens, 70);
+        assert_eq!(usage.cache_creation_tokens, 12);
+        let mut response = response;
+        response["usage"]["prompt_tokens_details"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cache_write_tokens");
+        assert_eq!(
+            UsageMapper::map_from_response(&response, "openai:chat").cache_creation_tokens,
+            0
+        );
     }
 
     #[test]

@@ -108,10 +108,25 @@ pub fn maybe_bridge_standard_sync_json_to_stream(
         provider_body_json,
         provider_api_format.as_str(),
     );
-    let terminal_summary = build_terminal_summary_from_openai_responses_response(
+    let mut terminal_summary = build_terminal_summary_from_openai_responses_response(
         &openai_responses_response,
         provider_actual_service_tier.clone(),
     );
+    if report_context
+        .and_then(|context| context.get("provider_type"))
+        .and_then(Value::as_str)
+        == Some("clinepass")
+    {
+        let facts = crate::clinepass::parse_clinepass_response(provider_body_json);
+        if let Some(summary) = terminal_summary.as_mut() {
+            summary.provider_channel = facts.channel;
+            if let (Some(usage), Some(read)) =
+                (summary.standardized_usage.as_mut(), facts.cache_read_tokens)
+            {
+                usage.cache_read_tokens = read;
+            }
+        }
+    }
     let response_history_record =
         record_converted_response_history(&bridge_context, &openai_responses_response);
     let canonical_frames = build_canonical_frames_from_openai_responses_response(
@@ -562,6 +577,7 @@ fn openai_image_terminal_summary(
             .map(ToOwned::to_owned)
             .or_else(|| image_bridge_model(report_context)),
         provider_actual_service_tier: None,
+        provider_channel: None,
         observed_finish: true,
         unknown_event_count: 0,
         parser_error: None,
@@ -1235,6 +1251,7 @@ fn build_terminal_summary_from_openai_responses_response(
         response_id,
         model,
         provider_actual_service_tier,
+        provider_channel: None,
         observed_finish: true,
         unknown_event_count: 0,
         parser_error: None,

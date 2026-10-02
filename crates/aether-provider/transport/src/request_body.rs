@@ -35,6 +35,36 @@ pub fn apply_transport_request_body_semantics(
     provider_api_format: &str,
 ) -> Result<(), TransportRequestBodySemanticsError> {
     let provider_api_format = aether_ai_formats::normalize_api_format_alias(provider_api_format);
+    if provider_api_format == "openai:chat"
+        && transport
+            .provider
+            .provider_type
+            .trim()
+            .eq_ignore_ascii_case("clinepass")
+    {
+        if provider_request_body.get("stream").and_then(Value::as_bool) == Some(true) {
+            let options = provider_request_body
+                .as_object_mut()
+                .ok_or_else(|| {
+                    TransportRequestBodySemanticsError::new(
+                        "ClinePass request body must be an object",
+                    )
+                })?
+                .entry("stream_options")
+                .or_insert_with(|| serde_json::json!({}));
+            let options = options.as_object_mut().ok_or_else(|| {
+                TransportRequestBodySemanticsError::new(
+                    "ClinePass stream_options must be an object",
+                )
+            })?;
+            options.insert("include_usage".to_string(), Value::Bool(true));
+        }
+        crate::clinepass::apply_clinepass_channel_filter(
+            provider_request_body,
+            transport.provider.config.as_ref(),
+        )
+        .map_err(TransportRequestBodySemanticsError::new)?;
+    }
     if provider_api_format == "claude:messages"
         && transport
             .provider
@@ -319,6 +349,22 @@ mod tests {
                 decrypted_auth_config: None,
             },
         }
+    }
+
+    #[test]
+    fn clinepass_transport_applies_channel_filter_and_requests_stream_usage() {
+        let mut transport = sample_transport("clinepass", "https://api.cline.bot/api/v1");
+        transport.provider.config =
+            Some(json!({"clinepass":{"models":{"test":{"only":["baseten"]}}}}));
+        let mut body = json!({"model":"test","stream":true,"messages":[{"role":"user","content":"hi"}],"stream_options":{"include_usage":false}});
+        apply_transport_request_body_semantics(&mut body, &transport, "openai:chat").unwrap();
+        assert_eq!(body["provider"]["only"], json!(["baseten"]));
+        assert_eq!(
+            body["providerOptions"]["gateway"]["only"],
+            json!(["baseten"])
+        );
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["messages"][0]["content"], "hi");
     }
 
     #[test]

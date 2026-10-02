@@ -2520,6 +2520,9 @@ pub(crate) fn sync_provider_key_quota_status_snapshot(
 ) -> Option<Value> {
     let normalized_provider_type = provider_type.trim().to_ascii_lowercase();
     let mut quota = match normalized_provider_type.as_str() {
+        "clinepass" => upstream_metadata
+            .and_then(|metadata| metadata.get("clinepass"))
+            .cloned(),
         "codex" => build_codex_quota_status_snapshot(upstream_metadata, source),
         "kiro" => build_kiro_quota_status_snapshot(upstream_metadata, source),
         "xai" => build_xai_quota_status_snapshot(upstream_metadata, source),

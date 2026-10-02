@@ -1717,6 +1717,7 @@ fn provider_quota_url_has_allowed_origin(provider_name: &str, value: &str) -> bo
         "chatgpt_web" | "codex" => host == "chatgpt.com",
         "grok" => host == "grok.com",
         "xai" => host == "cli-chat-proxy.grok.com",
+        "clinepass" => host == "api.cline.bot",
         "windsurf" => host == "server.codeium.com",
         "kiro" => kiro_quota_host_is_allowed(host),
         _ => false,

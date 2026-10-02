@@ -238,6 +238,10 @@ pub(crate) fn insert_provider_stream_event_api_format(
     extra_fields: &mut Map<String, Value>,
     provider_type: &str,
 ) {
+    extra_fields.insert(
+        "provider_type".to_string(),
+        Value::String(provider_type.trim().to_ascii_lowercase()),
+    );
     insert_ai_provider_stream_event_api_format(extra_fields, provider_type);
 }
 

@@ -48,6 +48,31 @@ fn context(format: &str) -> Value {
     json!({"provider_api_format": format, "client_api_format": format, "mapped_model": "test-model"})
 }
 
+#[test]
+fn clinepass_terminal_observer_retains_channel_and_cache_reads_across_chunks() {
+    let context = json!({"provider_api_format":"openai:chat","client_api_format":"claude:messages","provider_type":"clinepass"});
+    let mut observer = StreamingStandardTerminalObserver::default();
+    for event in [
+        json!({"id":"chat-1","model":"test","choices":[{"index":0,"delta":{"content":"hi","provider_metadata":{"gateway":{"routing":{"finalProvider":"baseten"}},"baseten":{"promptCacheHitTokens":70,"promptCacheMissTokens":30}}},"finish_reason":null}]}),
+        json!({"id":"chat-1","model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        json!({"id":"chat-1","model":"test","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":12}}}),
+    ] {
+        observer
+            .push_line(&context, format!("data: {event}\n").into_bytes())
+            .unwrap();
+    }
+    observer
+        .push_line(&context, b"data: [DONE]\n".to_vec())
+        .unwrap();
+    let summary = observer.finish(&context).unwrap().unwrap();
+    assert_eq!(summary.provider_channel.as_deref(), Some("baseten"));
+    assert!(summary.observed_finish);
+    let usage = summary.standardized_usage.unwrap();
+    assert_eq!(usage.input_tokens, 100);
+    assert_eq!(usage.cache_read_tokens, 70);
+    assert_eq!(usage.cache_creation_tokens, 12);
+}
+
 fn completed(output: Vec<Value>) -> Value {
     json!({"type":"response.completed","response":{
         "id":"resp-final","model":"final-model","status":"completed","service_tier":" PRIORITY ",

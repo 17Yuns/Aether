@@ -1,6 +1,7 @@
 pub(crate) mod antigravity;
 pub(crate) mod chatgpt_web;
 pub(crate) mod claude_code;
+pub(crate) mod clinepass;
 pub(crate) mod codex;
 pub(crate) mod dispatch;
 pub(crate) mod gemini_cli;

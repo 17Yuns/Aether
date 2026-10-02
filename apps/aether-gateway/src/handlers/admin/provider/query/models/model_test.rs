@@ -1677,7 +1677,9 @@ fn provider_query_decode_execution_body(
         })
 }
 
-fn provider_query_execution_json_body(result: &aether_contracts::ExecutionResult) -> Option<Value> {
+pub(super) fn provider_query_execution_json_body(
+    result: &aether_contracts::ExecutionResult,
+) -> Option<Value> {
     result
         .body
         .as_ref()

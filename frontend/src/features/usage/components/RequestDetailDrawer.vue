@@ -138,6 +138,10 @@
               <span>{{ formatApiFormat(detail.api_format) }}</span>
               <span class="hidden opacity-40 sm:inline">|</span>
               <span>用户: {{ detail.user?.username || 'Unknown' }}</span>
+              <span
+                v-if="detail.clinepass_channel"
+                data-usage-provider-channel
+              >渠道商: {{ detail.clinepass_channel }}</span>
             </div>
           </div>
 
@@ -1015,6 +1019,7 @@ const emit = defineEmits<{
     requestedReasoningEffort?: string | null
     reasoningEffort?: string | null
     serviceTier?: string | null
+    clinepassChannel?: string | null
     actualServiceTier?: string | null
     responseModel?: string | null
     imageProgress?: ImageProgress | null
@@ -1338,6 +1343,7 @@ function emitDetailRequestState(nextDetail: RequestDetail) {
     ...(requestedReasoningEffort ? { requestedReasoningEffort } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(serviceTier ? { serviceTier } : {}),
+    clinepassChannel: nextDetail.clinepass_channel ?? null,
     ...(actualServiceTier ? { actualServiceTier } : {}),
     ...(responseModel ? { responseModel } : {}),
     errorMessage: nextDetail.error_message ?? undefined,

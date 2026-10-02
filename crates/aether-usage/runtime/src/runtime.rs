@@ -6902,6 +6902,7 @@ mod tests {
                 client_response_body_state: Some(UsageBodyCaptureState::None),
                 standardized_usage: None,
                 provider_actual_service_tier: Some("default".to_string()),
+                provider_channel: None,
                 observed_stream_finish: Some(true),
                 terminal_error_message: None,
                 capture_metadata: None,

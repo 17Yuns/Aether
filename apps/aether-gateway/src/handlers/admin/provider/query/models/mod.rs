@@ -373,6 +373,8 @@ async fn provider_query_persist_upstream_metadata(
     Ok(())
 }
 
+mod clinepass_probe;
+pub(crate) use clinepass_probe::probe_clinepass_channels;
 mod model_test;
 
 pub(crate) use self::model_test::{

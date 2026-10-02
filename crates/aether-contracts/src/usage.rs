@@ -134,6 +134,8 @@ pub struct ExecutionStreamTerminalSummary {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_actual_service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_channel: Option<String>,
     #[serde(default)]
     pub observed_finish: bool,
     #[serde(default, skip_serializing_if = "is_zero_u64")]

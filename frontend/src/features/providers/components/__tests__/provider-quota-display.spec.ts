@@ -4,6 +4,7 @@ import { createApp, defineComponent, h } from 'vue'
 import ProviderMonthlyQuotaCard from '@/features/providers/components/ProviderMonthlyQuotaCard.vue'
 import ProviderQuotaProgressRow from '@/features/providers/components/ProviderQuotaProgressRow.vue'
 import ProviderQuotaSectionHeader from '@/features/providers/components/ProviderQuotaSectionHeader.vue'
+import ClinePassQuotaPanel from '../ClinePassQuotaPanel.vue'
 import { createI18n } from '@/i18n'
 
 function mount(component: Parameters<typeof createApp>[0], props?: Record<string, unknown>) {
@@ -23,6 +24,22 @@ function mount(component: Parameters<typeof createApp>[0], props?: Record<string
 }
 
 describe('provider quota display components', () => {
+  it('shows ClinePass remaining windows and keeps a missing window unknown', () => {
+    const { root, unmount } = mount(ClinePassQuotaPanel, {
+      quota: { plan_type: 'Monthly', windows: [
+        { code: 'five_hour', remaining_ratio: 0.8 },
+        { code: 'weekly', remaining_ratio: 0 },
+      ] },
+      metadata: { current_period_end: '2026-10-14T00:00:00Z' },
+    })
+    expect(root.textContent).toContain('5h')
+    expect(root.textContent).toContain('7d')
+    expect(root.textContent).toContain('30d')
+    expect(root.textContent).toContain('额度未知')
+    expect(root.textContent).toContain('套餐到期')
+    expect([...root.querySelectorAll('[data-testid="provider-quota-progress-meter"]')].map(node => node.textContent?.trim())).toEqual(['80.0%', '0.0%'])
+    unmount()
+  })
   it('renders monthly quota usage and reset day', () => {
     const { root, unmount } = mount(ProviderMonthlyQuotaCard, {
       used: 25,
