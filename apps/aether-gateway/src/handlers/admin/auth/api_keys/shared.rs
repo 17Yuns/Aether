@@ -18,6 +18,7 @@ const ADMIN_API_KEYS_DATA_UNAVAILABLE_DETAIL: &str = "Admin standalone API key d
 #[derive(Debug, Default, serde::Deserialize)]
 pub(super) struct AdminStandaloneApiKeyCreateRequest {
     pub(super) name: Option<String>,
+    pub(super) pricing_group_id: Option<String>,
     pub(super) allowed_providers: Option<Vec<String>>,
     pub(super) allowed_api_formats: Option<Vec<String>>,
     pub(super) allowed_models: Option<Vec<String>>,
@@ -36,6 +37,7 @@ pub(super) struct AdminStandaloneApiKeyCreateRequest {
 #[derive(Debug, Default, serde::Deserialize)]
 pub(super) struct AdminStandaloneApiKeyUpdateRequest {
     pub(super) name: Option<String>,
+    pub(super) pricing_group_id: Option<String>,
     pub(super) allowed_providers: Option<Vec<String>>,
     pub(super) allowed_api_formats: Option<Vec<String>>,
     pub(super) allowed_models: Option<Vec<String>>,

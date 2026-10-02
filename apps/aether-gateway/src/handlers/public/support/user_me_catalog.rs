@@ -144,6 +144,20 @@ async fn resolve_users_me_allowed_global_model_ids(
     ))
 }
 
+fn public_pricing_group_payload(group: &aether_billing::groups::PricingGroup) -> serde_json::Value {
+    json!({"id": group.id, "name": group.name, "multiplier": group.multiplier,
+        "is_visible": group.is_visible})
+}
+
+fn scale_model_group_prices(
+    model: &mut serde_json::Value,
+    multiplier: f64,
+) -> Result<(), &'static str> {
+    *model =
+        aether_billing::groups::scale_model_sale_prices(model, multiplier).ok_or("分组价格无效")?;
+    Ok(())
+}
+
 pub(super) async fn handle_users_me_pricing_groups(
     state: &AppState,
     context: &GatewayPublicRequestContext,
@@ -154,7 +168,8 @@ pub(super) async fn handle_users_me_pricing_groups(
     }
     match state.read_pricing_groups_config().await {
         Ok(config) => Json(json!({ "enabled": config.enabled,
-            "default_group_id": config.default_group_id, "groups": config.visible_groups() }))
+            "default_group_id": config.default_group_id, "groups": config.visible_groups().iter()
+                .map(public_pricing_group_payload).collect::<Vec<_>>() }))
         .into_response(),
         Err(error) => build_auth_error_response(
             http::StatusCode::SERVICE_UNAVAILABLE,
@@ -229,7 +244,7 @@ pub(super) async fn handle_users_me_available_models(
             }
         }
     };
-    let provider_model_ids = if auth.user.role.eq_ignore_ascii_case("admin") {
+    let mut provider_model_ids = if auth.user.role.eq_ignore_ascii_case("admin") {
         None
     } else {
         match resolve_users_me_allowed_global_model_ids(
@@ -244,6 +259,33 @@ pub(super) async fn handle_users_me_available_models(
             Err(response) => return response,
         }
     };
+    let group_model_ids = match state
+        .pricing_group_available_model_ids(
+            &pricing_config,
+            effective_policies
+                .as_ref()
+                .and_then(|policies| policies.allowed_providers.as_deref()),
+        )
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            return build_auth_error_response(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                error.into_message(),
+                false,
+            )
+        }
+    };
+    if let Some(allowed) = group
+        .as_ref()
+        .and_then(|group| group_model_ids.get(&group.id))
+    {
+        provider_model_ids = Some(match provider_model_ids {
+            Some(existing) => existing.intersection(allowed).cloned().collect(),
+            None => allowed.clone(),
+        });
+    }
     let allowed_models: Option<BTreeSet<String>> = if auth.user.role.eq_ignore_ascii_case("admin") {
         None
     } else {
@@ -338,73 +380,56 @@ pub(super) async fn handle_users_me_available_models(
         .into_iter()
         .map(|model| build_users_me_available_model_payload(model, hide_mapping_config))
         .collect::<Vec<_>>();
-    if let Some(group) = &group {
-        for model in &mut models {
-            if let Some(video) = model
-                .get_mut("config")
-                .and_then(|config| config.get_mut("billing"))
-                .and_then(|billing| billing.get_mut("video"))
-            {
-                if let Some(prices) = video
-                    .get_mut("price_per_second_by_resolution")
-                    .and_then(serde_json::Value::as_object_mut)
+    for model in &mut models {
+        let base = model.clone();
+        let mut quotes = Vec::new();
+        for visible_group in pricing_config
+            .groups
+            .iter()
+            .filter(|group| pricing_config.enabled && group.is_visible)
+        {
+            let available = group_model_ids
+                .get(&visible_group.id)
+                .is_none_or(|allowed| base["id"].as_str().is_some_and(|id| allowed.contains(id)));
+            let mut quote = public_pricing_group_payload(visible_group);
+            quote["is_available"] = json!(available);
+            if available {
+                let mut priced = base.clone();
+                if let Err(error) = scale_model_group_prices(&mut priced, visible_group.multiplier)
                 {
-                    for price in prices.values_mut() {
-                        if let Some(value) = price.as_f64() {
-                            let value = value * group.multiplier;
-                            if !value.is_finite() || value < 0.0 {
-                                return build_auth_error_response(
-                                    http::StatusCode::SERVICE_UNAVAILABLE,
-                                    "分组价格无效",
-                                    false,
-                                );
-                            }
-                            *price = json!(value);
-                        }
-                    }
-                }
-                if let Some(price) = video.get_mut("price_per_second") {
-                    if let Some(value) = price.as_f64() {
-                        let value = value * group.multiplier;
-                        if !value.is_finite() || value < 0.0 {
-                            return build_auth_error_response(
-                                http::StatusCode::SERVICE_UNAVAILABLE,
-                                "分组价格无效",
-                                false,
-                            );
-                        }
-                        *price = json!(value);
-                    }
-                }
-            }
-            if let Some(price) = model["default_price_per_request"].as_f64() {
-                let price = price * group.multiplier;
-                if !price.is_finite() {
                     return build_auth_error_response(
                         http::StatusCode::SERVICE_UNAVAILABLE,
-                        "分组价格无效",
+                        error,
                         false,
                     );
                 }
-                model["default_price_per_request"] = json!(price);
+                quote["default_tiered_pricing"] = priced["default_tiered_pricing"].clone();
+                quote["default_price_per_request"] = priced["default_price_per_request"].clone();
+                quote["config"] = priced["config"].clone();
             }
-            if !model["default_tiered_pricing"].is_null() {
-                let Some(pricing) = aether_billing::groups::scale_group_pricing(
-                    &model["default_tiered_pricing"],
-                    group.multiplier,
-                ) else {
-                    return build_auth_error_response(
-                        http::StatusCode::SERVICE_UNAVAILABLE,
-                        "分组价格无效",
-                        false,
-                    );
-                };
-                model["default_tiered_pricing"] = pricing;
+            quotes.push(quote);
+        }
+        if let Some(group) = &group {
+            if let Err(error) = scale_model_group_prices(model, group.multiplier) {
+                return build_auth_error_response(
+                    http::StatusCode::SERVICE_UNAVAILABLE,
+                    error,
+                    false,
+                );
             }
         }
+        model["base_pricing"] = json!({
+            "default_tiered_pricing": base["default_tiered_pricing"],
+            "default_price_per_request": base["default_price_per_request"], "config": base["config"],
+        });
+        model["group_prices"] = json!(quotes);
+        model["pricing_group"] = group
+            .as_ref()
+            .map(public_pricing_group_payload)
+            .unwrap_or(serde_json::Value::Null);
     }
     Json(json!({
-        "models": models, "total": page.total, "pricing_group": group,
+        "models": models, "total": page.total, "pricing_group": group.as_ref().map(public_pricing_group_payload),
     }))
     .into_response()
 }

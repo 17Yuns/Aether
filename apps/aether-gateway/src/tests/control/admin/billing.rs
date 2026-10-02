@@ -709,3 +709,90 @@ async fn gateway_admin_pricing_groups_persist_and_reject_invalid_multipliers() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     handle.abort();
 }
+
+#[tokio::test]
+async fn gateway_admin_pricing_groups_validate_pairs_and_quote_hidden_group_prices() {
+    use super::super::{sample_admin_global_model, sample_admin_provider_model};
+    use aether_data::repository::global_models::InMemoryGlobalModelReadRepository;
+    let repository = Arc::new(
+        InMemoryGlobalModelReadRepository::default()
+            .with_admin_global_models([sample_admin_global_model(
+                "deepseek", "deepseek", "DeepSeek",
+            )])
+            .with_admin_provider_models([
+                sample_admin_provider_model(
+                    "model-a",
+                    "provider-a",
+                    "deepseek",
+                    "deepseek-upstream",
+                ),
+                sample_admin_provider_model(
+                    "model-b",
+                    "provider-b",
+                    "deepseek",
+                    "deepseek-upstream",
+                ),
+            ]),
+    );
+    let data = GatewayDataState::with_global_model_reader_for_tests(repository)
+        .with_system_config_values_for_tests(Vec::<(String, serde_json::Value)>::new());
+    let state = AppState::new().unwrap().with_data_state_for_tests(data);
+    let (url, handle) = start_server(build_router_with_state(state)).await;
+    let config = json!({"enabled":true, "default_group_id":"deepseek", "groups":[
+        {"id":"deepseek", "name":"DeepSeek", "multiplier":0.1, "is_visible":true,
+         "model_access":[{"global_model_id":"deepseek", "provider_ids":["provider-a","provider-b"]}]},
+        {"id":"private", "name":"专属", "multiplier":1.1, "is_visible":false,
+         "model_access":[{"global_model_id":"deepseek", "provider_ids":["provider-b"]}]},
+        {"id":"empty", "name":"未开放", "multiplier":1, "is_visible":true, "model_access":[]}
+    ]});
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::PUT,
+        "/api/admin/billing/pricing-groups",
+        Some(config.clone()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = send_admin_billing_request(
+        &url,
+        http::Method::GET,
+        "/api/admin/billing/pricing-groups?global_model_id=deepseek",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let quote: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(
+        quote["base_pricing"]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        4.0
+    );
+    assert_eq!(
+        quote["group_prices"][0]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        0.4
+    );
+    assert_eq!(quote["group_prices"][1]["is_visible"], false);
+    assert_eq!(
+        quote["group_prices"][1]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        4.4
+    );
+    assert_eq!(quote["group_prices"][2]["is_available"], false);
+    assert!(quote["group_prices"][2]
+        .get("default_tiered_pricing")
+        .is_none());
+    for (field, value) in [
+        ("global_model_id", json!("missing")),
+        ("provider_ids", json!(["provider-c"])),
+    ] {
+        let mut invalid = config.clone();
+        invalid["groups"][0]["model_access"][0][field] = value;
+        let response = send_admin_billing_request(
+            &url,
+            http::Method::PUT,
+            "/api/admin/billing/pricing-groups",
+            Some(invalid),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    handle.abort();
+}

@@ -820,3 +820,116 @@ async fn gateway_handles_admin_api_keys_delete_locally_with_trusted_admin_princi
     gateway_handle.abort();
     upstream_handle.abort();
 }
+
+#[tokio::test]
+async fn gateway_standalone_api_key_persists_and_updates_hidden_pricing_groups() {
+    let (upstream_url, upstream_hits, upstream_handle) =
+        start_api_keys_upstream("/api/admin/api-keys").await;
+    let repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(Vec::<(
+        Option<String>,
+        StoredAuthApiKeySnapshot,
+    )>::new()));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                crate::data::GatewayDataState::with_auth_api_key_repository_for_tests(Arc::clone(
+                    &repository,
+                ))
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY)
+                .with_system_config_values_for_tests([(
+                    "pricing_groups".into(),
+                    json!({
+                        "enabled":true, "default_group_id":"default", "groups":[
+                            {"id":"default", "name":"默认", "multiplier":1, "is_visible":true},
+                            {"id":"private", "name":"专属", "multiplier":0.1, "is_visible":false}
+                        ]
+                    }),
+                )]),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response =
+        admin_request(reqwest::Client::new().post(format!("{gateway_url}/api/admin/api-keys")))
+            .json(&json!({
+                "name": "standalone-key",
+                "pricing_group_id": "private",
+                "rate_limit": null,
+                "allowed_providers": ["openai"],
+                "allowed_api_formats": ["openai:chat"],
+                "allowed_models": ["gpt-4.1"],
+                "initial_balance_usd": 12.5,
+                "expires_at": "2030-01-02",
+                "auto_delete_on_expiry": true,
+            }))
+            .send()
+            .await
+            .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["name"], json!("standalone-key"));
+    assert_eq!(payload["is_standalone"], json!(true));
+    assert_eq!(payload["rate_limit"], serde_json::Value::Null);
+    assert_eq!(payload["concurrent_limit"], serde_json::Value::Null);
+    assert_eq!(payload["allowed_providers"], json!(["openai"]));
+    assert_eq!(payload["allowed_api_formats"], json!(["openai:chat"]));
+    assert_eq!(payload["allowed_models"], json!(["gpt-4.1"]));
+    assert_eq!(payload["auto_delete_on_expiry"], json!(true));
+    assert_eq!(payload["wallet"]["balance"], json!(12.5));
+    assert_eq!(payload["wallet"]["limit_mode"], json!("finite"));
+    assert_eq!(payload["wallet"]["unlimited"], json!(false));
+    assert!(payload["expires_at"]
+        .as_str()
+        .expect("expires_at should exist")
+        .starts_with("2030-01-02"));
+    assert_eq!(payload["feature_settings"]["pricing_group_id"], "private");
+    let plaintext = payload["key"]
+        .as_str()
+        .expect("plaintext key should exist")
+        .to_string();
+    assert!(plaintext.starts_with("sk-"));
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    let list_response =
+        admin_request(reqwest::Client::new().get(format!("{gateway_url}/api/admin/api-keys")))
+            .send()
+            .await
+            .expect("list request should succeed");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_payload: serde_json::Value =
+        list_response.json().await.expect("list json should parse");
+    assert_eq!(list_payload["total"], json!(1));
+    assert_eq!(list_payload["api_keys"][0]["name"], json!("standalone-key"));
+
+    let id = payload["id"].as_str().unwrap();
+    for (body, expected, status) in [
+        (
+            json!({"name":"renamed", "feature_settings":null}),
+            "private",
+            StatusCode::OK,
+        ),
+        (
+            json!({"pricing_group_id":"missing"}),
+            "",
+            StatusCode::BAD_REQUEST,
+        ),
+        (json!({"pricing_group_id":null}), "default", StatusCode::OK),
+    ] {
+        let response = admin_request(
+            reqwest::Client::new().put(format!("{gateway_url}/api/admin/api-keys/{id}")),
+        )
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(response.status(), status);
+        if status == StatusCode::OK {
+            let payload: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(payload["feature_settings"]["pricing_group_id"], expected);
+        }
+    }
+    gateway_handle.abort();
+    upstream_handle.abort();
+}

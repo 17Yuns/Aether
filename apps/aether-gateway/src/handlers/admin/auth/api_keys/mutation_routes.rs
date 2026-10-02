@@ -192,6 +192,17 @@ pub(super) async fn build_admin_create_api_key_response(
         Ok(value) => value,
         Err(detail) => return Ok(build_admin_api_keys_bad_request_response(detail)),
     };
+    let pricing_config = state.app().read_pricing_groups_config().await?;
+    let feature_settings = match aether_billing::groups::admin_key_group_settings(
+        &pricing_config,
+        feature_settings,
+        payload.pricing_group_id.as_deref().map(Some),
+        None,
+        true,
+    ) {
+        Ok(settings) => settings,
+        Err(detail) => return Ok(build_admin_api_keys_bad_request_response(detail)),
+    };
 
     let plaintext_key = generate_admin_user_api_key_plaintext();
     let api_key_id = uuid::Uuid::new_v4().to_string();
@@ -379,6 +390,26 @@ pub(super) async fn build_admin_update_api_key_response(
     else {
         return Ok(build_admin_api_keys_not_found_response());
     };
+    let feature_settings =
+        if feature_settings.is_some() || field_presence.contains("pricing_group_id") {
+            let pricing_config = state.app().read_pricing_groups_config().await?;
+            let selection = field_presence
+                .contains("pricing_group_id")
+                .then_some(payload.pricing_group_id.as_deref());
+            let settings = feature_settings.unwrap_or_else(|| existing.feature_settings.clone());
+            match aether_billing::groups::admin_key_group_settings(
+                &pricing_config,
+                settings,
+                selection,
+                existing.feature_settings.as_ref(),
+                false,
+            ) {
+                Ok(settings) => Some(settings),
+                Err(detail) => return Ok(build_admin_api_keys_bad_request_response(detail)),
+            }
+        } else {
+            None
+        };
 
     let name = match normalize_admin_optional_api_key_name(payload.name) {
         Ok(value) => value,

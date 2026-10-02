@@ -133,6 +133,57 @@
           </div>
         </section>
 
+        <section
+          v-if="pricingGroups.enabled || pricingGroupsLoading || pricingGroupsError"
+          class="space-y-2"
+        >
+          <Label for="standalone-key-pricing-group">调用与定价分组</Label>
+          <select
+            v-if="pricingGroups.enabled"
+            id="standalone-key-pricing-group"
+            v-model="form.pricing_group_id"
+            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">
+              跟随默认分组
+            </option>
+            <option
+              v-for="group in pricingGroups.groups"
+              :key="group.id"
+              :value="group.id"
+            >
+              {{ group.name }} · {{ group.multiplier }}×{{ group.is_visible ? '' : ' · 隐藏' }}
+            </option>
+            <option
+              v-if="form.pricing_group_id && !pricingGroups.groups.some(group => group.id === form.pricing_group_id)"
+              :value="form.pricing_group_id"
+            >
+              {{ form.pricing_group_id }}（分组已失效，请重新选择）
+            </option>
+          </select>
+          <p class="text-xs text-muted-foreground">
+            密钥仅可调用所选分组允许的供应商和模型，并按该组统一倍率扣费。
+          </p>
+          <p
+            v-if="pricingGroupsLoading"
+            class="text-xs text-muted-foreground"
+          >
+            加载分组…
+          </p>
+          <div
+            v-if="pricingGroupsError"
+            class="flex items-center gap-2 text-xs text-destructive"
+          >
+            {{ pricingGroupsError }}<Button
+              variant="outline"
+              size="sm"
+              @click="loadPricingGroups"
+            >
+              重试
+            </Button>
+          </div>
+        </section>
+
         <section>
           <div class="rounded-lg border border-border bg-muted/30 px-4 py-3">
             <div class="flex items-center justify-between gap-3">
@@ -337,7 +388,7 @@
         取消
       </Button>
       <Button
-        :disabled="saving"
+        :disabled="saving || pricingGroupsLoading || !!pricingGroupsError"
         class="h-10 px-5"
         @click="handleSubmit"
       >
@@ -365,6 +416,8 @@ import { MultiSelect } from '@/components/common'
 import { getProvidersSummary } from '@/api/endpoints/providers'
 import { getGlobalModels } from '@/api/global-models'
 import { adminApi } from '@/api/admin'
+import { pricingGroupsApi, type PricingGroupsConfig } from '@/api/pricing-groups'
+import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
 import { parseNumberInput } from '@/utils/form'
 import {
@@ -376,6 +429,7 @@ import type { ProviderWithEndpointsSummary, GlobalModelResponse } from '@/api/en
 export interface StandaloneKeyFormData {
   id?: string
   name: string
+  pricing_group_id?: string | null
   initial_balance_usd?: number
   current_balance_usd?: number | null
   unlimited_balance?: boolean
@@ -393,6 +447,7 @@ export interface StandaloneKeyFormData {
 interface StandaloneKeyFormState {
   id?: string
   name: string
+  pricing_group_id?: string | null
   initial_balance_usd?: number
   current_balance_usd?: number | null
   unlimited_balance?: boolean
@@ -431,6 +486,23 @@ const accessRestrictionsExpanded = ref(false)
 const providers = ref<ProviderWithEndpointsSummary[]>([])
 const globalModels = ref<GlobalModelResponse[]>([])
 const allApiFormats = ref<string[]>([])
+const pricingGroups = ref<PricingGroupsConfig>({ enabled: false, default_group_id: '', groups: [] })
+const pricingGroupsLoading = ref(false)
+const pricingGroupsError = ref('')
+let groupsLoadVersion = 0
+async function loadPricingGroups() {
+  const version = ++groupsLoadVersion
+  pricingGroupsLoading.value = true
+  pricingGroupsError.value = ''
+  try {
+    const response = await pricingGroupsApi.getAdmin()
+    if (version !== groupsLoadVersion) return
+    pricingGroups.value = response
+    if (!isEditMode.value && !form.value.pricing_group_id && response.enabled) form.value.pricing_group_id = response.default_group_id
+  } catch (reason) {
+    if (version === groupsLoadVersion) pricingGroupsError.value = parseApiError(reason, '分组加载失败')
+  } finally { if (version === groupsLoadVersion) pricingGroupsLoading.value = false }
+}
 
 const providerOptions = computed(() =>
   providers.value.map((provider) => ({
@@ -454,6 +526,7 @@ const modelOptions = computed(() =>
 // 表单数据
 const form = ref<StandaloneKeyFormState>({
   name: '',
+  pricing_group_id: '',
   initial_balance_usd: 10,
   current_balance_usd: undefined,
   unlimited_balance: false,
@@ -503,6 +576,7 @@ const balanceDisplayText = computed(() => {
 function resetForm() {
   form.value = {
     name: '',
+    pricing_group_id: '',
     initial_balance_usd: 10,
     current_balance_usd: undefined,
     unlimited_balance: false,
@@ -530,6 +604,7 @@ function loadKeyData() {
   form.value = {
     id: props.apiKey.id,
     name: props.apiKey.name || '',
+    pricing_group_id: props.apiKey.pricing_group_id ?? (typeof props.apiKey.feature_settings?.pricing_group_id === 'string' ? props.apiKey.feature_settings.pricing_group_id : ''),
     initial_balance_usd: props.apiKey.initial_balance_usd,
     current_balance_usd: props.apiKey.current_balance_usd ?? props.apiKey.initial_balance_usd ?? null,
     unlimited_balance: props.apiKey.initial_balance_usd == null,
@@ -584,9 +659,11 @@ function clearExpiryDate() {
 
 // 提交表单
 function handleSubmit() {
+  if (pricingGroupsLoading.value || pricingGroupsError.value) return
   emit('submit', {
     id: form.value.id,
     name: form.value.name,
+    ...(pricingGroups.value.enabled ? { pricing_group_id: form.value.pricing_group_id || null } : {}),
     initial_balance_usd: form.value.initial_balance_usd,
     unlimited_balance: form.value.unlimited_balance,
     expires_at: form.value.expires_at,
@@ -622,8 +699,9 @@ watch(isOpen, (val) => {
   if (val) {
     accessRestrictionsExpanded.value = false
     loadAccessRestrictionOptions()
-  }
-})
+    loadPricingGroups()
+  } else { groupsLoadVersion++; pricingGroupsLoading.value = false }
+}, { immediate: true })
 
 watch(
   () => form.value.unlimited_balance,

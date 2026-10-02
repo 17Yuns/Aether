@@ -54,9 +54,9 @@
                 variant="outline"
                 size="sm"
                 class="h-8"
-                @click="pricingGroupsDialogOpen = true"
+                @click="router.push('/admin/pricing-groups')"
               >
-                分组定价
+                分组管理
               </Button>
               <ExternalModelsAccessControl />
               <Button
@@ -361,7 +361,6 @@
       </Card>
     </div>
 
-    <PricingGroupsDialog v-model:open="pricingGroupsDialogOpen" />
 
     <!-- 创建/编辑模型对话框 -->
     <GlobalModelFormDialog
@@ -734,6 +733,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { useRouter } from 'vue-router'
+const router = useRouter()
 import {
   Plus,
   Edit,
@@ -750,7 +751,6 @@ import {
   RefreshCw,
 } from 'lucide-vue-next'
 import ModelDetailDrawer from '@/features/models/components/ModelDetailDrawer.vue'
-import PricingGroupsDialog from '@/features/models/components/PricingGroupsDialog.vue'
 import GlobalModelFormDialog from '@/features/models/components/GlobalModelFormDialog.vue'
 import ExternalModelsAccessControl from '@/features/models/components/ExternalModelsAccessControl.vue'
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
@@ -849,7 +849,6 @@ const searchQuery = ref('')
 const selectedModel = ref<GlobalModelResponse | null>(null)
 const modelDetailDrawerRef = ref<InstanceType<typeof ModelDetailDrawer> | null>(null)
 const createModelDialogOpen = ref(false)
-const pricingGroupsDialogOpen = ref(false)
 const editingModel = ref<GlobalModelResponse | null>(null)
 
 // 数据
@@ -983,7 +982,7 @@ function getVideoPricingTooltip(model: GlobalModelResponse): string {
 
 // 检测是否有对话框打开（防止误关闭抽屉）
 const hasBlockingDialogOpen = computed(() =>
-  pricingGroupsDialogOpen.value || createModelDialogOpen.value ||
+  createModelDialogOpen.value ||
   batchAddProvidersDialogOpen.value ||
   editProviderDialogOpen.value ||
   batchManageDialogOpen.value

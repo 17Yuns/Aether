@@ -69,6 +69,11 @@ export const adminRoutes: RouteRecordRaw[] = [
         component: view(() => import('@/views/admin/ModelManagement.vue'))
       },
       {
+        path: 'pricing-groups',
+        name: 'PricingGroupsManagement',
+        component: view(() => import('@/views/admin/PricingGroupsManagement.vue'))
+      },
+      {
         path: 'routing',
         name: 'RoutingProfiles',
         component: view(() => import('@/views/admin/RoutingProfiles.vue'))

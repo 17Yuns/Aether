@@ -649,6 +649,7 @@ pub(crate) async fn build_local_execution_candidate_attempt_source_with_serving<
     client_session_affinity: Option<&ClientSessionAffinity>,
     required_capabilities: Option<&Value>,
     routing_policy: Option<&ResolvedRoutingPolicy>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
     sticky_session_token: Option<&str>,
     request_auth_channel: Option<&str>,
     persistence_policy: LocalCandidatePersistencePolicy<'_>,
@@ -662,6 +663,21 @@ where
     F: Fn(&EligibleLocalExecutionCandidate) -> Option<Value> + Send + Sync,
     G: Fn(SkippedLocalExecutionCandidate) -> SkippedLocalExecutionCandidate + Send + Sync,
 {
+    let candidates = candidates
+        .into_iter()
+        .filter(|candidate| {
+            super::candidate_source::pricing_group_allows_candidate(pricing_group, candidate)
+        })
+        .collect();
+    let preselection_skipped = preselection_skipped
+        .into_iter()
+        .filter(|skipped| {
+            super::candidate_source::pricing_group_allows_candidate(
+                pricing_group,
+                &skipped.candidate,
+            )
+        })
+        .collect::<Vec<_>>();
     let scheduler_cache_affinity_enabled =
         scheduler_cache_affinity_enabled(state, routing_policy).await;
     let _ = build_available_extra_data;
@@ -814,6 +830,7 @@ pub(crate) async fn build_lazy_requested_model_execution_candidate_attempt_sourc
     client_session_affinity: Option<&ClientSessionAffinity>,
     required_capabilities: Option<&Value>,
     routing_policy: Option<&ResolvedRoutingPolicy>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
     sticky_session_token: Option<&str>,
     request_auth_channel: Option<&str>,
     persistence_policy: LocalCandidatePersistencePolicy<'_>,
@@ -849,7 +866,8 @@ where
         sticky_session_token.is_none(),
         Some(trace_id),
     )
-    .await;
+    .await
+    .with_pricing_group(pricing_group);
     let mut cursor = RequestedModelAttemptPageCursor {
         state,
         trace_id: trace_id.to_string(),

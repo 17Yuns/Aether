@@ -725,6 +725,63 @@ async fn gateway_handles_public_openai_models_without_hitting_fallback_probe() {
     fallback_probe_handle.abort();
 }
 
+#[tokio::test]
+async fn gateway_api_models_enforces_pricing_group_provider_model_pairs() {
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+        Some(hash_api_key("sk-pricing-models")),
+        unrestricted_models_snapshot("key-1", "user-1"),
+    )]));
+    let candidate_repository =
+        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+            sample_models_candidate_row("provider-a", "A", "openai:chat", "gpt-5", 10),
+            sample_models_candidate_row("provider-b", "B", "openai:chat", "gpt-4.1", 20),
+            sample_models_candidate_row("provider-a", "A", "openai:chat", "gpt-4.1", 10),
+        ]));
+    let gateway = build_router_with_state(
+        AppState::new().unwrap().with_data_state_for_tests(
+            crate::data::GatewayDataState::with_minimal_candidate_selection_and_auth_for_tests(
+                candidate_repository,
+                auth_repository,
+            )
+            .with_system_config_values_for_tests([(
+                "pricing_groups".to_string(),
+                json!({"enabled":true, "default_group_id":"restricted", "groups":[
+                    {"id":"restricted", "name":"Restricted", "multiplier":0.1,
+                     "model_access":[
+                        {"global_model_id":"global-gpt-5", "provider_ids":["provider-a"]},
+                        {"global_model_id":"global-gpt-4.1", "provider_ids":["provider-c"]}
+                     ]}
+                ]}),
+            )]),
+        ),
+    );
+    let (url, handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{url}/v1/models"))
+        .bearer_auth("sk-pricing-models")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(payload["data"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["data"][0]["id"], "gpt-5");
+    for (model, status) in [
+        ("gpt-5", StatusCode::OK),
+        ("gpt-4.1", StatusCode::NOT_FOUND),
+    ] {
+        let response = client
+            .get(format!("{url}/v1/models/{model}"))
+            .bearer_auth("sk-pricing-models")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    handle.abort();
+}
+
 #[test]
 fn gateway_versioned_models_fail_closed_when_cached_auth_becomes_unusable_or_missing() {
     std::thread::Builder::new()

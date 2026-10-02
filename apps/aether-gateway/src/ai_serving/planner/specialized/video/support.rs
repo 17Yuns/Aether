@@ -227,6 +227,7 @@ pub(super) async fn build_local_video_create_candidate_attempt_source<'a>(
         input.client_session_affinity.as_ref(),
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
+        input.pricing_group.as_ref(),
         sticky_session_token.as_deref(),
         input.request_auth_channel.as_deref(),
         persistence_policy,

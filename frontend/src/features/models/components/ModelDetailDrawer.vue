@@ -139,10 +139,30 @@
                 </div>
               </div>
 
+              <ModelGroupPrices :prices="groupPrices" />
+              <p
+                v-if="groupPricesLoading"
+                class="text-xs text-muted-foreground"
+              >
+                加载分组价格…
+              </p>
+              <div
+                v-if="groupPricesError"
+                class="flex items-center gap-2 text-xs text-destructive"
+              >
+                {{ groupPricesError }}<Button
+                  variant="outline"
+                  size="sm"
+                  @click="loadGroupPrices"
+                >
+                  重试
+                </Button>
+              </div>
+
               <!-- 默认定价 -->
               <div class="space-y-3">
                 <h4 class="font-semibold text-sm">
-                  默认定价
+                  基础定价
                 </h4>
 
                 <ProcessingTierPricingSummary :pricing="model.default_tiered_pricing" />
@@ -560,6 +580,8 @@ import TableCell from '@/components/ui/table-cell.vue'
 import RoutingTab from './RoutingTab.vue'
 import ModelMappingsTab from './ModelMappingsTab.vue'
 import ProcessingTierPricingSummary from './ProcessingTierPricingSummary.vue'
+import ModelGroupPrices from './ModelGroupPrices.vue'
+import { pricingGroupsApi, type ModelGroupPrice } from '@/api/pricing-groups'
 import { sortResolutionEntries } from '@/utils/form'
 import { parseApiError } from '@/utils/errorParser'
 import { formatCompactNumber, formatModelPrice, formatTokens } from '@/utils/format'
@@ -592,6 +614,26 @@ interface Props {
   open: boolean
   hasBlockingDialogOpen?: boolean
 }
+
+const groupPrices = ref<ModelGroupPrice[]>([])
+const groupPricesLoading = ref(false)
+const groupPricesError = ref('')
+let groupPricesVersion = 0
+async function loadGroupPrices() {
+  const version = ++groupPricesVersion
+  const id = props.model?.id
+  groupPrices.value = []
+  groupPricesError.value = ''
+  if (!id || !props.open) { groupPricesLoading.value = false; return }
+  groupPricesLoading.value = true
+  try {
+    const response = await pricingGroupsApi.getModelPrices(id)
+    if (version === groupPricesVersion) groupPrices.value = response.group_prices
+  } catch (reason) {
+    if (version === groupPricesVersion) groupPricesError.value = parseApiError(reason, '分组价格加载失败')
+  } finally { if (version === groupPricesVersion) groupPricesLoading.value = false }
+}
+watch(() => [props.open, props.model?.id, props.model?.default_tiered_pricing, props.model?.default_price_per_request], loadGroupPrices, { immediate: true })
 
 // RoutingTab 引用
 const routingTabRef = ref<InstanceType<typeof RoutingTab> | null>(null)

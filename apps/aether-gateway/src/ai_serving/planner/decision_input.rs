@@ -124,14 +124,40 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision_with_websocket_m
     transport: Option<&GatewayProviderTransportSnapshot>,
     websocket_continuation: bool,
 ) -> Result<(), GatewayError> {
+    if let Some(group) = input
+        .pricing_group
+        .as_ref()
+        .filter(|group| group.model_access.is_some())
+    {
+        let model_id = decision
+            .report_context
+            .as_ref()
+            .and_then(|context| context.get("global_model_id"))
+            .and_then(Value::as_str);
+        let provider_id = decision.provider_id.as_deref();
+        if !model_id
+            .zip(provider_id)
+            .is_some_and(|(model, provider)| group.allows(model, provider))
+        {
+            return Err(GatewayError::Client {
+                status: http::StatusCode::FORBIDDEN,
+                message: "当前分组不允许调用该供应商的模型".to_string(),
+            });
+        }
+    }
     let report_context = decision
         .report_context
         .get_or_insert_with(|| serde_json::json!({}));
     if let Some(context) = report_context.as_object_mut() {
         context.insert(
             aether_billing::groups::PRICING_GROUP_SNAPSHOT_KEY.to_string(),
-            serde_json::to_value(&input.pricing_group)
-                .map_err(|error| GatewayError::Internal(error.to_string()))?,
+            serde_json::to_value(
+                input
+                    .pricing_group
+                    .as_ref()
+                    .map(|group| group.billing_snapshot()),
+            )
+            .map_err(|error| GatewayError::Internal(error.to_string()))?,
         );
     }
     let provider_api_format = decision
@@ -1528,6 +1554,61 @@ mod tests {
                 "model_id": "model-1"
             })),
             auth_context: Some(sample_auth_context()),
+        }
+    }
+
+    #[test]
+    fn pricing_group_rechecks_pinned_provider_model_pairs_before_dispatch() {
+        let mut input = sample_decision_input();
+        input.routing_context = None;
+        input.pricing_group = Some(
+            serde_json::from_value(json!({
+                "id":"deepseek", "name":"DeepSeek", "multiplier":0.1, "is_visible":true,
+                "model_access":[{"global_model_id":"global-1", "provider_ids":["provider-1"]}]
+            }))
+            .unwrap(),
+        );
+        for websocket in [false, true] {
+            let mut decision = sample_decision();
+            decision.report_context.as_mut().unwrap()["global_model_id"] = json!("global-1");
+            apply_provider_request_routing_policy_to_decision_with_websocket_mode(
+                &input,
+                &mut decision,
+                None,
+                websocket,
+            )
+            .unwrap();
+            assert_eq!(
+                decision.report_context.as_ref().unwrap()["pricing_group"]["multiplier"],
+                0.1
+            );
+            assert!(decision.report_context.as_ref().unwrap()["pricing_group"]
+                .get("model_access")
+                .is_none());
+            decision.provider_id = Some("provider-2".into());
+            assert!(matches!(
+                apply_provider_request_routing_policy_to_decision_with_websocket_mode(
+                    &input,
+                    &mut decision,
+                    None,
+                    websocket
+                ),
+                Err(GatewayError::Client {
+                    status: http::StatusCode::FORBIDDEN,
+                    ..
+                })
+            ));
+            decision.provider_id = Some("provider-1".into());
+            decision.report_context.as_mut().unwrap()["global_model_id"] = json!("global-2");
+            assert!(
+                apply_provider_request_routing_policy_to_decision_with_websocket_mode(
+                    &input,
+                    &mut decision,
+                    None,
+                    websocket
+                )
+                .is_err()
+            );
         }
     }
 

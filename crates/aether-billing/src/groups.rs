@@ -11,12 +11,49 @@ pub const PRICING_GROUP_SNAPSHOT_KEY: &str = "pricing_group";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PricingGroupModelAccess {
+    pub global_model_id: String,
+    pub provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PricingGroup {
     pub id: String,
     pub name: String,
     pub multiplier: f64,
     #[serde(default = "default_visible")]
     pub is_visible: bool,
+    /// Missing/null preserves existing groups. An empty list permits no models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_access: Option<Vec<PricingGroupModelAccess>>,
+}
+
+impl PricingGroup {
+    pub fn allows_model(&self, global_model_id: &str) -> bool {
+        self.model_access.as_ref().is_none_or(|models| {
+            models
+                .iter()
+                .any(|model| model.global_model_id == global_model_id)
+        })
+    }
+
+    pub fn allows(&self, global_model_id: &str, provider_id: &str) -> bool {
+        self.model_access.as_ref().is_none_or(|models| {
+            models.iter().any(|model| {
+                model.global_model_id == global_model_id
+                    && model.provider_ids.iter().any(|id| id == provider_id)
+            })
+        })
+    }
+
+    /// Pricing snapshots need the rate, not the complete routing allowlist.
+    pub fn billing_snapshot(&self) -> Self {
+        Self {
+            model_access: None,
+            ..self.clone()
+        }
+    }
 }
 
 fn default_visible() -> bool {
@@ -42,6 +79,7 @@ impl Default for PricingGroupsConfig {
                 name: "默认分组".to_string(),
                 multiplier: 1.0,
                 is_visible: true,
+                model_access: None,
             }],
         }
     }
@@ -80,6 +118,34 @@ impl PricingGroupsConfig {
             }
             if !group.multiplier.is_finite() || group.multiplier < 0.0 {
                 return Err("分组倍率必须是大于等于 0 的有限数值".to_string());
+            }
+            if let Some(models) = &group.model_access {
+                if models.len() > 10000 {
+                    return Err("每个分组最多配置 10000 个模型".to_string());
+                }
+                let mut model_ids = BTreeSet::new();
+                for model in models {
+                    if model.global_model_id.trim().is_empty()
+                        || model.global_model_id != model.global_model_id.trim()
+                        || model.global_model_id.len() > 200
+                        || !model_ids.insert(&model.global_model_id)
+                    {
+                        return Err("分组模型 ID 无效或重复".to_string());
+                    }
+                    let mut provider_ids = BTreeSet::new();
+                    if model.provider_ids.is_empty() || model.provider_ids.len() > 10000 {
+                        return Err("每个分组模型必须至少选择一个供应商".to_string());
+                    }
+                    for id in &model.provider_ids {
+                        if id.trim().is_empty()
+                            || id != id.trim()
+                            || id.len() > 200
+                            || !provider_ids.insert(id)
+                        {
+                            return Err("分组供应商 ID 无效或重复".to_string());
+                        }
+                    }
+                }
             }
         }
         let default = self
@@ -165,6 +231,44 @@ pub fn user_key_group_settings(
     Ok(settings)
 }
 
+/// Administrators may assign hidden groups to both user and standalone keys.
+pub fn admin_key_group_settings(
+    config: &PricingGroupsConfig,
+    mut settings: Option<Value>,
+    selection: Option<Option<&str>>,
+    existing: Option<&Value>,
+    creating: bool,
+) -> Result<Option<Value>, String> {
+    let setting_id = pricing_group_id(settings.as_ref())?;
+    let current = pricing_group_id(existing)?;
+    let chosen = selection.or_else(|| setting_id.map(Some));
+    let selected = match chosen {
+        Some(id) => {
+            if !config.enabled {
+                if id.is_some() && (creating || id != current) {
+                    return Err("分组定价尚未启用".to_string());
+                }
+                id.map(ToOwned::to_owned)
+            } else {
+                config.resolve(id)?.map(|group| group.id)
+            }
+        }
+        None if creating => config.resolve(None)?.map(|group| group.id),
+        None => pricing_group_id(existing)?.map(ToOwned::to_owned),
+    };
+    if let Some(object) = settings.as_mut().and_then(Value::as_object_mut) {
+        object.remove(PRICING_GROUP_ID_SETTING);
+    }
+    if let Some(id) = selected {
+        settings
+            .get_or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| "feature_settings 必须为对象".to_string())?
+            .insert(PRICING_GROUP_ID_SETTING.to_string(), Value::String(id));
+    }
+    Ok(settings)
+}
+
 /// Materialize display prices without changing context bands, TTLs, or ratios.
 pub fn scale_group_pricing(pricing: &Value, multiplier: f64) -> Option<Value> {
     let mut result = crate::pricing::multiply_pricing_catalog(pricing, multiplier, "group")?;
@@ -194,6 +298,54 @@ pub fn scale_group_pricing(pricing: &Value, multiplier: f64) -> Option<Value> {
             .insert("processing_tiers".to_string(), Value::Object(scaled));
     }
     Some(result)
+}
+
+pub fn scale_model_sale_prices(pricing: &Value, multiplier: f64) -> Option<Value> {
+    if !multiplier.is_finite() || multiplier < 0.0 || !pricing.is_object() {
+        return None;
+    }
+    let mut model = pricing.clone();
+    if let Some(video) = model
+        .get_mut("config")
+        .and_then(|config| config.get_mut("billing"))
+        .and_then(|billing| billing.get_mut("video"))
+    {
+        if let Some(prices) = video
+            .get_mut("price_per_second_by_resolution")
+            .and_then(Value::as_object_mut)
+        {
+            for price in prices.values_mut() {
+                if let Some(value) = price.as_f64() {
+                    let value = value * multiplier;
+                    if !value.is_finite() || value < 0.0 {
+                        return None;
+                    }
+                    *price = serde_json::json!(value);
+                }
+            }
+        }
+        if let Some(price) = video.get_mut("price_per_second") {
+            if let Some(value) = price.as_f64() {
+                let value = value * multiplier;
+                if !value.is_finite() || value < 0.0 {
+                    return None;
+                }
+                *price = serde_json::json!(value);
+            }
+        }
+    }
+    if let Some(price) = model["default_price_per_request"].as_f64() {
+        let price = price * multiplier;
+        if !price.is_finite() {
+            return None;
+        }
+        model["default_price_per_request"] = serde_json::json!(price);
+    }
+    if !model["default_tiered_pricing"].is_null() {
+        let pricing = scale_group_pricing(&model["default_tiered_pricing"], multiplier)?;
+        model["default_tiered_pricing"] = pricing;
+    }
+    Some(model)
 }
 
 /// Group billing uses the model's base sale catalog. Provider overrides and
@@ -235,6 +387,140 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn group_membership_is_an_allowlist_of_exact_provider_model_pairs() {
+        let config = PricingGroupsConfig::from_value(Some(json!({
+            "enabled": true, "default_group_id": "deepseek", "groups": [
+                {"id":"deepseek", "name":"DeepSeek", "multiplier":0.1, "is_visible":true,
+                 "model_access":[{"global_model_id":"deepseek", "provider_ids":["a","b"]}]},
+                {"id":"claude", "name":"Claude", "multiplier":1.1, "is_visible":true,
+                 "model_access":[{"global_model_id":"claude", "provider_ids":["a"]}]},
+                {"id":"shared", "name":"Shared", "multiplier":0.5, "is_visible":true,
+                 "model_access":[{"global_model_id":"deepseek", "provider_ids":["b"]}]}
+            ]
+        })))
+        .unwrap();
+        let deepseek = config.resolve(Some("deepseek")).unwrap().unwrap();
+        let claude = config.resolve(Some("claude")).unwrap().unwrap();
+        let shared = config.resolve(Some("shared")).unwrap().unwrap();
+        assert!(deepseek.allows("deepseek", "a"));
+        assert!(deepseek.allows("deepseek", "b"));
+        assert!(!deepseek.allows("claude", "a"));
+        assert!(!deepseek.allows("deepseek", "c"));
+        assert!(claude.allows("claude", "a"));
+        assert!(!claude.allows("claude", "b"));
+        assert!(shared.allows("deepseek", "b"));
+        assert_eq!(deepseek.billing_snapshot().multiplier, 0.1);
+        assert!(deepseek.billing_snapshot().model_access.is_none());
+    }
+
+    #[test]
+    fn empty_access_denies_every_model_and_missing_access_preserves_existing_groups() {
+        let mut group = PricingGroupsConfig::default().groups.remove(0);
+        assert!(group.allows("any-model", "any-provider"));
+        group.model_access = Some(Vec::new());
+        assert!(!group.allows("any-model", "any-provider"));
+        assert!(!group.allows_model("any-model"));
+        let config = PricingGroupsConfig {
+            groups: vec![group],
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn group_membership_rejects_empty_providers_and_duplicate_pairs() {
+        for models in [
+            json!([{"global_model_id":"model", "provider_ids":[]}]),
+            json!([{"global_model_id":"model", "provider_ids":["a","a"]}]),
+            json!([{"global_model_id":"model", "provider_ids":["a"]},
+                   {"global_model_id":"model", "provider_ids":["b"]}]),
+        ] {
+            let mut config = serde_json::to_value(PricingGroupsConfig::default()).unwrap();
+            config["groups"][0]["model_access"] = models;
+            assert!(PricingGroupsConfig::from_value(Some(config)).is_err());
+        }
+    }
+
+    #[test]
+    fn administrator_can_assign_hidden_groups_and_preserve_them_while_disabled() {
+        let mut config = PricingGroupsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut hidden = config.groups[0].clone();
+        hidden.id = "private".into();
+        hidden.name = "专属".into();
+        hidden.is_visible = false;
+        config.groups.push(hidden);
+        let assigned = admin_key_group_settings(&config, None, Some(Some("private")), None, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(assigned["pricing_group_id"], "private");
+        assert!(
+            admin_key_group_settings(&config, None, Some(Some("missing")), None, true).is_err()
+        );
+        config.enabled = false;
+        let preserved = admin_key_group_settings(
+            &config,
+            Some(assigned.clone()),
+            None,
+            Some(&assigned),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(preserved["pricing_group_id"], "private");
+        assert!(admin_key_group_settings(
+            &config,
+            None,
+            Some(Some("default")),
+            Some(&assigned),
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn materialized_group_prices_scale_video_and_preserve_small_and_zero_prices() {
+        let base = json!({"default_price_per_request":0.02,
+            "default_tiered_pricing":{"tiers":[{"up_to":200000,"input_price_per_1m":1,
+                "output_price_per_1m":0,"cache_read_price_per_1m":0.000001,
+                "cache_ttl_pricing":[{"ttl_minutes":60,"cache_creation_price_per_1m":2}]}]},
+            "config":{"billing":{"video":{"price_per_second":0.2,
+                "price_per_second_by_resolution":{"1080p":0.3}}}}});
+        let prices = scale_model_sale_prices(&base, 0.1).unwrap();
+        assert_eq!(prices["default_price_per_request"], 0.002);
+        assert_eq!(
+            prices["default_tiered_pricing"]["tiers"][0]["up_to"],
+            200000
+        );
+        assert_eq!(
+            prices["default_tiered_pricing"]["tiers"][0]["output_price_per_1m"].as_f64(),
+            Some(0.0)
+        );
+        assert_eq!(
+            prices["default_tiered_pricing"]["tiers"][0]["cache_ttl_pricing"][0]["ttl_minutes"],
+            60
+        );
+        assert!(
+            prices["default_tiered_pricing"]["tiers"][0]["cache_read_price_per_1m"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert!(
+            (prices["config"]["billing"]["video"]["price_per_second"]
+                .as_f64()
+                .unwrap()
+                - 0.02)
+                .abs()
+                < 1e-12
+        );
+        assert!(scale_model_sale_prices(&base, -1.0).is_none());
+        assert_eq!(base["default_price_per_request"], 0.02);
+    }
+
+    #[test]
     fn defaults_preserve_legacy_billing_until_enabled() {
         let mut config = PricingGroupsConfig::default();
         assert_eq!(config.resolve(None).unwrap(), None);
@@ -254,6 +540,7 @@ mod tests {
             name: "专属".into(),
             multiplier: 0.5,
             is_visible: false,
+            model_access: None,
         });
         config.validate().unwrap();
         assert_eq!(config.visible_groups().len(), 1);
@@ -322,6 +609,7 @@ mod tests {
             name: "专属".into(),
             multiplier: 0.5,
             is_visible: false,
+            model_access: None,
         });
         let injected = Some(json!({"pricing_group_id": "private", "other": true}));
         let settings = user_key_group_settings(&config, injected, None, None, true)
@@ -362,6 +650,7 @@ mod tests {
             name: "VIP".into(),
             multiplier: 0.5,
             is_visible: true,
+            model_access: None,
         };
         let mut legacy = crate::BillingService::new()
             .calculate(&pricing, &input)

@@ -4,6 +4,7 @@
 
 import client from './client'
 import type { TieredPricingConfig } from './endpoints/types'
+import type { ModelGroupPrice, ModelSalePricing } from './pricing-groups'
 
 export interface PublicGlobalModel {
   id: string
@@ -20,6 +21,9 @@ export interface PublicGlobalModel {
   config: Record<string, unknown> | null
   // 调用次数
   usage_count: number
+  base_pricing?: ModelSalePricing
+  group_prices?: ModelGroupPrice[]
+  pricing_group?: { id: string; name: string; multiplier: number } | null
 }
 
 export interface PublicGlobalModelListResponse {

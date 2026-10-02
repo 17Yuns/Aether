@@ -63,6 +63,7 @@ struct GatewayLocalCandidatePreselectionPort<'a> {
     required_capabilities: Option<&'a serde_json::Value>,
     auth_snapshot: &'a GatewayAuthApiKeySnapshot,
     routing_policy: Option<&'a ResolvedRoutingPolicy>,
+    pricing_group: Option<&'a aether_billing::groups::PricingGroup>,
     client_session_affinity: Option<&'a ClientSessionAffinity>,
     use_api_format_alias_match: bool,
     key_mode: LocalCandidatePreselectionKeyMode,
@@ -195,7 +196,8 @@ impl AiCandidatePreselectionPort for GatewayLocalCandidatePreselectionPort<'_> {
         candidate_api_format: &str,
         matches_client_format: bool,
     ) -> bool {
-        routing_policy_allows_provider(self.routing_policy, candidate)
+        pricing_group_allows_candidate(self.pricing_group, candidate)
+            && routing_policy_allows_provider(self.routing_policy, candidate)
             && (matches_client_format
                 || auth_snapshot_allows_cross_format_candidate(
                     self.auth_snapshot,
@@ -211,7 +213,8 @@ impl AiCandidatePreselectionPort for GatewayLocalCandidatePreselectionPort<'_> {
         candidate_api_format: &str,
         matches_client_format: bool,
     ) -> bool {
-        routing_policy_allows_provider(self.routing_policy, &skipped_candidate.candidate)
+        pricing_group_allows_candidate(self.pricing_group, &skipped_candidate.candidate)
+            && routing_policy_allows_provider(self.routing_policy, &skipped_candidate.candidate)
             && (matches_client_format
                 || auth_snapshot_allows_cross_format_candidate(
                     self.auth_snapshot,
@@ -258,6 +261,7 @@ pub(crate) async fn preselect_local_execution_candidates_with_serving(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: &GatewayAuthApiKeySnapshot,
     routing_policy: Option<&ResolvedRoutingPolicy>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
     client_session_affinity: Option<&ClientSessionAffinity>,
     use_api_format_alias_match: bool,
     key_mode: LocalCandidatePreselectionKeyMode,
@@ -283,6 +287,7 @@ pub(crate) async fn preselect_local_execution_candidates_with_serving(
         required_capabilities,
         auth_snapshot,
         routing_policy,
+        pricing_group,
         client_session_affinity,
         use_api_format_alias_match,
         key_mode,
@@ -302,6 +307,7 @@ pub(crate) async fn preselect_local_execution_candidates_for_api_formats_with_se
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: &GatewayAuthApiKeySnapshot,
     routing_policy: Option<&ResolvedRoutingPolicy>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
     client_session_affinity: Option<&ClientSessionAffinity>,
     use_api_format_alias_match: bool,
     key_mode: LocalCandidatePreselectionKeyMode,
@@ -332,6 +338,7 @@ pub(crate) async fn preselect_local_execution_candidates_for_api_formats_with_se
         required_capabilities,
         auth_snapshot,
         routing_policy,
+        pricing_group,
         client_session_affinity,
         use_api_format_alias_match,
         key_mode,
@@ -353,6 +360,7 @@ pub(crate) struct LocalCandidatePreselectionPageCursor<'a> {
     required_capabilities: Option<serde_json::Value>,
     auth_snapshot: GatewayAuthApiKeySnapshot,
     routing_policy: Option<ResolvedRoutingPolicy>,
+    pricing_group: Option<aether_billing::groups::PricingGroup>,
     client_session_affinity: Option<ClientSessionAffinity>,
     request_auth_channel: Option<String>,
     use_api_format_alias_match: bool,
@@ -385,6 +393,18 @@ pub(crate) struct LocalCandidatePreselectionPageCursor<'a> {
 }
 
 impl<'a> LocalCandidatePreselectionPageCursor<'a> {
+    pub(crate) fn with_pricing_group(
+        mut self,
+        group: Option<&aether_billing::groups::PricingGroup>,
+    ) -> Self {
+        self.pricing_group = group.cloned();
+        // Shared priority pages are cached without pricing-group membership.
+        if group.is_some_and(|group| group.model_access.is_some()) {
+            self.allow_priority_page_cache = false;
+        }
+        self
+    }
+
     fn model_directive_base_model(&self, candidate_api_format: &str) -> Option<&str> {
         self.model_directive_routing_models
             .get(&crate::ai_serving::normalize_api_format_alias(
@@ -440,6 +460,7 @@ impl<'a> LocalCandidatePreselectionPageCursor<'a> {
             required_capabilities: required_capabilities.cloned(),
             auth_snapshot: auth_snapshot.clone(),
             routing_policy: routing_policy.cloned(),
+            pricing_group: None,
             client_session_affinity: client_session_affinity.cloned(),
             request_auth_channel: request_auth_channel.map(str::to_string),
             use_api_format_alias_match,
@@ -1312,7 +1333,8 @@ impl<'a> LocalCandidatePreselectionPageCursor<'a> {
         candidate: &SchedulerMinimalCandidateSelectionCandidate,
         candidate_api_format: &str,
     ) -> bool {
-        routing_policy_allows_provider(self.routing_policy.as_ref(), candidate)
+        pricing_group_allows_candidate(self.pricing_group.as_ref(), candidate)
+            && routing_policy_allows_provider(self.routing_policy.as_ref(), candidate)
             && (matches_client_api_format(
                 self.use_api_format_alias_match,
                 candidate_api_format,
@@ -1330,7 +1352,11 @@ impl<'a> LocalCandidatePreselectionPageCursor<'a> {
         skipped_candidate: &SkippedLocalExecutionCandidate,
         candidate_api_format: &str,
     ) -> bool {
-        routing_policy_allows_provider(self.routing_policy.as_ref(), &skipped_candidate.candidate)
+        pricing_group_allows_candidate(self.pricing_group.as_ref(), &skipped_candidate.candidate)
+            && routing_policy_allows_provider(
+                self.routing_policy.as_ref(),
+                &skipped_candidate.candidate,
+            )
             && (matches_client_api_format(
                 self.use_api_format_alias_match,
                 candidate_api_format,
@@ -1454,6 +1480,13 @@ pub(crate) fn auth_snapshot_allows_cross_format_candidate(
     }
 
     true
+}
+
+pub(crate) fn pricing_group_allows_candidate(
+    group: Option<&aether_billing::groups::PricingGroup>,
+    candidate: &SchedulerMinimalCandidateSelectionCandidate,
+) -> bool {
+    group.is_none_or(|group| group.allows(&candidate.global_model_id, &candidate.provider_id))
 }
 
 fn routing_policy_allows_provider(
@@ -2087,6 +2120,89 @@ mod tests {
             model_supports_streaming: Some(true),
             model_is_active: true,
             model_is_available: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn pricing_group_filters_same_and_cross_format_candidates_without_sharing_priority_pages()
+    {
+        let rows = [
+            standard_candidate_row("provider-a", "openai:chat", 1),
+            standard_candidate_row("provider-b", "openai:responses", 2),
+            standard_candidate_row("provider-c", "claude:messages", 3),
+        ];
+        let repository: Arc<dyn MinimalCandidateSelectionReadRepository> = Arc::new(
+            InMemoryMinimalCandidateSelectionReadRepository::seed(rows.clone()),
+        );
+        let mut providers = Vec::new();
+        let mut endpoints = Vec::new();
+        let mut keys = Vec::new();
+        for row in &rows {
+            let (provider, endpoint, key) = provider_catalog_for_standard_row(row, true);
+            providers.push(provider);
+            endpoints.push(endpoint);
+            keys.push(key);
+        }
+        let catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+            providers, endpoints, keys,
+        ));
+        let app = AppState::new().unwrap().with_data_state_for_tests(
+            GatewayDataState::with_minimal_candidate_selection_reader_for_tests(repository)
+                .with_provider_catalog_reader(catalog)
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+        );
+        let policy = crate::system_features::ModelDirectivePolicySnapshot::load(&app).await;
+        let auth = unrestricted_auth_snapshot();
+        let group: aether_billing::groups::PricingGroup = serde_json::from_value(serde_json::json!({
+            "id":"responses", "name":"Responses", "multiplier":0.1, "is_visible":true,
+            "model_access":[{"global_model_id":"global-model-gpt-5", "provider_ids":["provider-b"]}]
+        })).unwrap();
+        for format in ["openai:chat", "openai:responses", "claude:messages"] {
+            let mut cursor = LocalCandidatePreselectionPageCursor::new(
+                PlannerAppState::new(&app),
+                &policy,
+                format,
+                "gpt-5",
+                None,
+                false,
+                None,
+                &auth,
+                None,
+                None,
+                None,
+                true,
+                LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModelAndApiFormat,
+                true,
+                None,
+            )
+            .await
+            .with_pricing_group(Some(&group));
+            assert!(!cursor.allow_priority_page_cache);
+            let mut candidates = Vec::new();
+            while let Some(page) = cursor.next_page().await.unwrap() {
+                candidates.extend(page.candidates);
+            }
+            assert_eq!(candidates.len(), 1, "{format}");
+            assert_eq!(candidates[0].provider_id, "provider-b", "{format}");
+            let direct = preselect_local_execution_candidates_with_serving(
+                PlannerAppState::new(&app),
+                &policy,
+                format,
+                "gpt-5",
+                None,
+                false,
+                None,
+                &auth,
+                None,
+                Some(&group),
+                None,
+                true,
+                LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModelAndApiFormat,
+            )
+            .await
+            .unwrap();
+            assert_eq!(direct.candidates.len(), 1, "{format}");
+            assert_eq!(direct.candidates[0].provider_id, "provider-b", "{format}");
         }
     }
 

@@ -167,10 +167,12 @@
               </div>
             </div>
 
+            <ModelGroupPrices :prices="model.group_prices || []" />
+
             <!-- 定价信息 -->
             <div class="space-y-3">
               <h4 class="font-semibold text-sm">
-                定价信息
+                {{ model.pricing_group ? `${model.pricing_group.name}售价 · ${model.pricing_group.multiplier}×` : '基础定价' }}
               </h4>
 
               <ProcessingTierPricingSummary :pricing="model.default_tiered_pricing" />
@@ -339,6 +341,7 @@ import TableHead from '@/components/ui/table-head.vue'
 import TableCell from '@/components/ui/table-cell.vue'
 import { formatModelPrice, formatTokens } from '@/utils/format'
 import ProcessingTierPricingSummary from '@/features/models/components/ProcessingTierPricingSummary.vue'
+import ModelGroupPrices from '@/features/models/components/ModelGroupPrices.vue'
 
 import type { PublicGlobalModel } from '@/api/public-models'
 import type { TieredPricingConfig, PricingTier } from '@/api/endpoints/types'

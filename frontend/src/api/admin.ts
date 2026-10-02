@@ -681,6 +681,7 @@ export interface AdminApiKey {
 
 export interface CreateStandaloneApiKeyRequest {
   name?: string
+  pricing_group_id?: string | null
   allowed_providers?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null

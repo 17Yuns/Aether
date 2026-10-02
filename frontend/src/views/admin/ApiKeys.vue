@@ -1209,6 +1209,7 @@ function editApiKey(apiKey: AdminApiKey) {
     allowed_providers: apiKey.allowed_providers == null ? null : [...apiKey.allowed_providers],
     allowed_api_formats: apiKey.allowed_api_formats == null ? null : [...apiKey.allowed_api_formats],
     allowed_models: apiKey.allowed_models == null ? null : [...apiKey.allowed_models],
+    pricing_group_id: typeof apiKey.feature_settings?.pricing_group_id === 'string' ? apiKey.feature_settings.pricing_group_id : null,
     feature_settings: apiKey.feature_settings ?? null
   }
 
@@ -1413,6 +1414,7 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
       // 更新
       const updateData: Partial<CreateStandaloneApiKeyRequest> = {
         name: data.name || undefined,
+        ...(data.pricing_group_id !== undefined ? { pricing_group_id: data.pricing_group_id } : {}),
         unlimited_balance: Boolean(data.unlimited_balance),
         rate_limit: data.rate_limit ?? null,  // undefined = 跟随系统默认，显式传 null
         concurrent_limit: data.concurrent_limit ?? null,
@@ -1445,6 +1447,7 @@ async function handleKeyFormSubmit(data: StandaloneKeyFormData) {
       }
       const createData: CreateStandaloneApiKeyRequest = {
         name: data.name || undefined,
+        ...(data.pricing_group_id !== undefined ? { pricing_group_id: data.pricing_group_id } : {}),
         initial_balance_usd: isUnlimited ? null : (data.initial_balance_usd as number),
         rate_limit: data.rate_limit ?? null,  // undefined = 跟随系统默认，显式传 null
         concurrent_limit: data.concurrent_limit ?? null,

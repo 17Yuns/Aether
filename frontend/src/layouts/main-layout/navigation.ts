@@ -132,6 +132,7 @@ export function buildNavigation(options: {
         { name: t('nav.userManagement'), href: '/admin/users', icon: Users },
         { name: t('nav.providers'), href: '/admin/providers', icon: FolderTree },
         { name: t('nav.modelManagement'), href: '/admin/models', icon: Layers },
+        { name: t('nav.pricingGroups'), href: '/admin/pricing-groups', icon: FolderTree },
         { name: t('nav.routing'), href: '/admin/routing', icon: SlidersHorizontal },
         { name: t('nav.pool'), href: '/admin/pool', icon: Database },
         { name: t('nav.standaloneKeys'), href: '/admin/keys', icon: Key },

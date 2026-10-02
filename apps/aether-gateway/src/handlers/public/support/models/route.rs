@@ -246,6 +246,7 @@ async fn list_model_rows_for_client_format(
     state: &AppState,
     api_format: &str,
     auth_snapshot: Option<&crate::data::auth::GatewayAuthApiKeySnapshot>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
 ) -> Option<ModelRowsForClientFormat> {
     let mut collected = Vec::new();
     let query_api_formats = if is_codex_models_api_format(api_format) {
@@ -264,6 +265,9 @@ async fn list_model_rows_for_client_format(
         } else {
             filter_rows_for_models(rows, auth_snapshot, query_format)
         };
+        filtered.retain(|row| {
+            pricing_group.is_none_or(|group| group.allows(&row.global_model_id, &row.provider_id))
+        });
         collected.append(&mut filtered);
     }
     if is_codex_models_api_format(api_format) {
@@ -286,6 +290,7 @@ async fn list_model_rows_for_client_format_and_global_model(
     api_format: &str,
     global_model_name: &str,
     auth_snapshot: Option<&crate::data::auth::GatewayAuthApiKeySnapshot>,
+    pricing_group: Option<&aether_billing::groups::PricingGroup>,
 ) -> Option<Vec<StoredMinimalCandidateSelectionRow>> {
     let mut collected = Vec::new();
     for query_format in models_query_api_formats(api_format) {
@@ -298,6 +303,9 @@ async fn list_model_rows_for_client_format_and_global_model(
         )
         .await?;
         let mut filtered = filter_rows_for_models(rows, auth_snapshot, query_format);
+        filtered.retain(|row| {
+            pricing_group.is_none_or(|group| group.allows(&row.global_model_id, &row.provider_id))
+        });
         collected.append(&mut filtered);
     }
     Some(sort_and_dedup_model_rows(collected))
@@ -354,20 +362,37 @@ pub(super) async fn maybe_build_local_models_route_response(
     if !auth_snapshot.currently_usable {
         return Some(build_models_auth_error_response(api_format));
     }
+    let pricing_group =
+        match aether_billing::BillingModelContextLookup::find_pricing_group_for_api_key(
+            state.data.as_ref(),
+            Some(&auth_context.user_id),
+            Some(&auth_context.api_key_id),
+        )
+        .await
+        {
+            Ok(group) => group,
+            Err(_) => return Some(build_models_auth_error_response(api_format)),
+        };
     let auth_snapshot = Some(auth_snapshot);
 
     match decision.route_kind.as_deref() {
         Some("list") => {
-            let listed =
-                match list_model_rows_for_client_format(state, api_format, auth_snapshot).await {
-                    Some(rows) => rows,
-                    None => {
-                        return Some(build_models_read_fallback_response(
-                            request_context,
-                            api_format,
-                        ))
-                    }
-                };
+            let listed = match list_model_rows_for_client_format(
+                state,
+                api_format,
+                auth_snapshot,
+                pricing_group.as_ref(),
+            )
+            .await
+            {
+                Some(rows) => rows,
+                None => {
+                    return Some(build_models_read_fallback_response(
+                        request_context,
+                        api_format,
+                    ))
+                }
+            };
             let rows = listed.rows;
             if rows.is_empty() {
                 return Some(build_empty_models_list_response(api_format));
@@ -444,6 +469,7 @@ pub(super) async fn maybe_build_local_models_route_response(
                 api_format,
                 &model_id,
                 auth_snapshot,
+                pricing_group.as_ref(),
             )
             .await
             {

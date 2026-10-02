@@ -12326,3 +12326,179 @@ async fn gateway_quotes_pricing_groups_and_hides_private_groups() {
     gateway_handle.abort();
     upstream_handle.abort();
 }
+
+#[tokio::test]
+async fn gateway_catalog_filters_pricing_groups_by_exact_provider_model_pairs() {
+    let now = Utc::now();
+    let user = sample_auth_user(now);
+    let access_token = build_test_auth_token(
+        "access",
+        serde_json::Map::from_iter([
+            ("user_id".to_string(), json!(user.id)),
+            ("role".to_string(), json!(user.role)),
+            (
+                "created_at".to_string(),
+                json!(user.created_at.map(|value| value.to_rfc3339())),
+            ),
+            (
+                "session_id".to_string(),
+                json!("session-users-me-available-models"),
+            ),
+        ]),
+        now + chrono::Duration::hours(1),
+    );
+    let global_model_repository = Arc::new(
+        InMemoryGlobalModelReadRepository::seed(vec![
+            sample_public_global_model("gm-1", "gpt-5", "GPT 5", true),
+            sample_public_global_model("gm-2", "claude-sonnet-4-5", "Claude Sonnet 4.5", true),
+            sample_public_global_model("gm-3", "disabled-model", "Disabled Model", false),
+        ])
+        .with_active_global_model_refs(vec![
+            StoredProviderActiveGlobalModel::new("provider-openai".to_string(), "gm-1".to_string())
+                .expect("active global model ref should build"),
+            StoredProviderActiveGlobalModel::new("provider-claude".to_string(), "gm-2".to_string())
+                .expect("active global model ref should build"),
+        ]),
+    );
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![
+            sample_provider("provider-openai", "openai", 10),
+            sample_provider("provider-claude", "claude", 20),
+        ],
+        vec![],
+        vec![],
+    ));
+    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
+        start_auth_gateway_with_builder(|| {
+            let data_state = crate::data::GatewayDataState::with_global_model_reader_for_tests(
+                global_model_repository,
+            )
+            .with_provider_catalog_reader(provider_catalog_repository)
+            .with_user_reader(user_repository)
+            .with_system_config_values_for_tests([(
+                "pricing_groups".to_string(),
+                json!({
+                    "enabled": true, "default_group_id": "default", "groups": [
+                        {"id": "default", "name": "默认", "multiplier": 1, "is_visible": true},
+                        {"id": "vip", "name": "VIP", "multiplier": 0.5, "is_visible": true,
+                         "model_access":[{"global_model_id":"gm-1", "provider_ids":["provider-openai"]}]},
+                        {"id": "claude", "name": "Claude", "multiplier": 1.1, "is_visible": true,
+                         "model_access":[{"global_model_id":"gm-2", "provider_ids":["provider-claude"]}]},
+                        {"id": "wrong-pair", "name": "Wrong pair", "multiplier": 0.2, "is_visible": true,
+                         "model_access":[{"global_model_id":"gm-1", "provider_ids":["provider-claude"]}]},
+                        {"id": "private", "name": "专属", "multiplier": 0.1, "is_visible": false}
+                    ]
+                }),
+            )]);
+            AppState::new()
+                .expect("gateway should build")
+                .with_data_state_for_tests(data_state)
+                .with_auth_sessions_for_tests([sample_auth_session(
+                    "user-auth-1",
+                    "session-users-me-available-models",
+                    "device-users-me-available-models",
+                    "refresh-token-placeholder",
+                    now,
+                )])
+        })
+        .await;
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/users/me/available-models?skip=0&limit=1&pricing_group_id=vip"
+        ))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-available-models")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    let models = payload["models"]
+        .as_array()
+        .expect("models should be an array");
+    assert_eq!(payload["total"], 1);
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["id"], "gm-1");
+    assert_eq!(models[0]["name"], "gpt-5");
+    assert_eq!(models[0]["display_name"], "GPT 5");
+    assert_eq!(payload["pricing_group"]["id"], "vip");
+    assert_eq!(
+        models[0]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        1.5
+    );
+    assert_eq!(models[0]["default_price_per_request"], 0.01);
+    assert_eq!(
+        models[0]["base_pricing"]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        3.0
+    );
+    let quotes = models[0]["group_prices"].as_array().unwrap();
+    assert_eq!(quotes.len(), 4);
+    assert_eq!(
+        quotes[1]["default_tiered_pricing"]["tiers"][0]["input_price_per_1m"],
+        1.5
+    );
+    assert_eq!(quotes[2]["is_available"], false);
+    assert!(quotes[2].get("default_tiered_pricing").is_none());
+    assert_eq!(quotes[3]["is_available"], false);
+    for (query, total, count, id) in [
+        ("pricing_group_id=vip&skip=1&limit=1", 1, 0, ""),
+        ("pricing_group_id=claude", 1, 1, "gm-2"),
+        ("pricing_group_id=wrong-pair", 0, 0, ""),
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{gateway_url}/api/users/me/available-models?{query}"
+            ))
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("x-client-device-id", "device-users-me-available-models")
+            .header("user-agent", "AetherTest/1.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(payload["total"], total);
+        assert_eq!(payload["models"].as_array().unwrap().len(), count);
+        if count > 0 {
+            assert_eq!(payload["models"][0]["id"], id);
+        }
+    }
+    let visible = reqwest::Client::new()
+        .get(format!("{gateway_url}/api/users/me/pricing-groups"))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-users-me-available-models")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(visible.status(), StatusCode::OK);
+    let visible: serde_json::Value = visible.json().await.unwrap();
+    assert_eq!(visible["groups"].as_array().unwrap().len(), 4);
+    assert!(!serde_json::to_string(&visible)
+        .unwrap()
+        .contains("provider-openai"));
+    for (group, status) in [
+        ("private", StatusCode::FORBIDDEN),
+        ("missing", StatusCode::BAD_REQUEST),
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{gateway_url}/api/users/me/available-models?pricing_group_id={group}"
+            ))
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("x-client-device-id", "device-users-me-available-models")
+            .header("user-agent", "AetherTest/1.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}

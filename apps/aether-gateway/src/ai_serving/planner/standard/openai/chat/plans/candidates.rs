@@ -29,6 +29,7 @@ pub(crate) async fn list_local_openai_chat_candidates(
         input.required_capabilities.as_ref(),
         &input.auth_snapshot,
         input.routing_policy.as_ref(),
+        input.pricing_group.as_ref(),
         input.client_session_affinity.as_ref(),
         false,
         LocalCandidatePreselectionKeyMode::ProviderEndpointKeyModel,
