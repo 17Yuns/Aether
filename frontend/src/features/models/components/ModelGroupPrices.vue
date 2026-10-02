@@ -1,6 +1,6 @@
 <template>
   <section
-    v-if="prices.length"
+    v-if="availablePrices.length"
     class="space-y-3"
     data-testid="model-group-prices"
   >
@@ -35,7 +35,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="group in prices"
+            v-for="group in availablePrices"
             :key="group.id"
             class="border-b last:border-0"
             :data-pricing-group="group.id"
@@ -52,29 +52,20 @@
             <td class="p-3 text-right font-mono">
               {{ group.multiplier }}×
             </td>
-            <template v-if="group.is_available">
-              <td class="p-3 text-right font-mono">
-                {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.input_price_per_1m) }}
-              </td>
-              <td class="p-3 text-right font-mono">
-                {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.output_price_per_1m) }}
-              </td>
-              <td class="p-3 text-right font-mono">
-                {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.cache_creation_price_per_1m) }}
-              </td>
-              <td class="p-3 text-right font-mono">
-                {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.cache_read_price_per_1m) }}
-              </td>
-              <td class="p-3 text-right font-mono">
-                {{ formatModelPrice(group.default_price_per_request) }}
-              </td>
-            </template>
-            <td
-              v-else
-              colspan="5"
-              class="p-3 text-center text-muted-foreground"
-            >
-              此分组未开放该模型
+            <td class="p-3 text-right font-mono">
+              {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.input_price_per_1m) }}
+            </td>
+            <td class="p-3 text-right font-mono">
+              {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.output_price_per_1m) }}
+            </td>
+            <td class="p-3 text-right font-mono">
+              {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.cache_creation_price_per_1m) }}
+            </td>
+            <td class="p-3 text-right font-mono">
+              {{ formatModelPrice(group.default_tiered_pricing?.tiers?.[0]?.cache_read_price_per_1m) }}
+            </td>
+            <td class="p-3 text-right font-mono">
+              {{ formatModelPrice(group.default_price_per_request) }}
             </td>
           </tr>
         </tbody>
@@ -84,7 +75,7 @@
       上表显示首档价格；阶梯、缓存时长、图像和视频的完整分组价格可在下方展开。
     </p>
     <details
-      v-for="group in prices.filter(item => item.is_available)"
+      v-for="group in availablePrices"
       :key="group.id"
       class="rounded-lg border p-3"
     >
@@ -184,12 +175,14 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Badge } from '@/components/ui'
 import type { ModelGroupPrice } from '@/api/pricing-groups'
 import { formatModelPrice, formatTokens } from '@/utils/format'
 import ProcessingTierPricingSummary from './ProcessingTierPricingSummary.vue'
 
-defineProps<{ prices: ModelGroupPrice[] }>()
+const props = defineProps<{ prices: ModelGroupPrice[] }>()
+const availablePrices = computed(() => props.prices.filter(group => group.is_available))
 function formatPriceValue(value: unknown) { return formatModelPrice(typeof value === 'number' ? value : null) }
 function videoPrices(group: ModelGroupPrice): Record<string, unknown> {
   const billing = group.config?.billing as { video?: { price_per_second?: number; price_per_second_by_resolution?: Record<string, number> } } | undefined

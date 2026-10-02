@@ -5,7 +5,7 @@ import ModelGroupPrices from '../ModelGroupPrices.vue'
 let app: App | undefined
 afterEach(() => { app?.unmount(); document.body.innerHTML = '' })
 describe('model group prices', () => {
-  it('shows the server prices once, including zero, small cache prices and unavailable groups', () => {
+  it('shows prices only for groups that have access to the model', () => {
     const root = document.createElement('div')
     document.body.appendChild(root)
     app = createApp(ModelGroupPrices, { prices: [
@@ -21,7 +21,8 @@ describe('model group prices', () => {
     expect(deepseek.textContent).toContain('0.00')
     expect(deepseek.textContent).toContain('0.000001')
     expect(deepseek.textContent).not.toContain('0.03')
-    expect(root.querySelector('[data-pricing-group="claude"]')?.textContent).toContain('未开放')
+    expect(root.querySelector('[data-pricing-group="claude"]')).toBeNull()
+    expect(root.textContent).not.toContain('此分组未开放该模型')
     expect(root.querySelector('[data-pricing-group="private"]')?.textContent).toContain('隐藏')
     expect(root.textContent).toContain('60 分钟')
   })
