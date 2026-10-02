@@ -1,4 +1,5 @@
 mod association_sync;
+mod clinepass;
 mod config;
 mod logic;
 mod strategy;

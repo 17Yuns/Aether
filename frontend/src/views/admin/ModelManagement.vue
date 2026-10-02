@@ -520,6 +520,7 @@
       :open="editProviderDialogOpen"
       :provider-id="editingProvider?.id || ''"
       :provider-name="editingProvider?.name || ''"
+      :provider-type="editingProvider?.provider_type"
       :editing-model="editingProviderModel"
       @update:open="handleEditProviderDialogUpdate"
       @saved="handleEditProviderSaved"

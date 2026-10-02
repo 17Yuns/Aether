@@ -386,6 +386,7 @@ const props = withDefaults(defineProps<{
   search: string
   metaText?: string
   poolSchedulingLabel: string
+  importLabel?: string
   showAdaptiveHotPoolMetricsButton: boolean
   selectedCount?: number
   isAllFilteredSelected: boolean
@@ -396,6 +397,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   metaText: '',
   selectedCount: 0,
+  importLabel: '导入账号',
 })
 
 const emit = defineEmits<{
@@ -448,7 +450,7 @@ const selectedCountLabel = computed(() => legacyT(`已选 ${Math.max(0, props.se
 const mobileActions = computed<HeaderAction[]>(() => {
   const actions: HeaderAction[] = [
     { key: 'viewProvider', title: legacyT('查看详情'), event: 'viewProvider', icon: Eye },
-    { key: 'import', title: legacyT('导入账号'), event: 'import', icon: Upload },
+    { key: 'import', title: legacyT(props.importLabel), event: 'import', icon: Upload },
     { key: 'scheduling', title: legacyT('号池调度'), event: 'scheduling', icon: SlidersHorizontal },
   ]
   if (props.showAdaptiveHotPoolMetricsButton) {
@@ -463,7 +465,7 @@ const mobileActions = computed<HeaderAction[]>(() => {
 const desktopActions = computed<HeaderAction[]>(() => {
   const actions: HeaderAction[] = [
     { key: 'viewProvider', title: legacyT('查看详情'), event: 'viewProvider', icon: Eye },
-    { key: 'import', title: legacyT('导入账号'), event: 'import', icon: Upload },
+    { key: 'import', title: legacyT(props.importLabel), event: 'import', icon: Upload },
   ]
   if (props.showAdaptiveHotPoolMetricsButton) {
     actions.push({ key: 'demandMetrics', title: legacyT('查看自适应热池指标'), event: 'demandMetrics', icon: Activity })

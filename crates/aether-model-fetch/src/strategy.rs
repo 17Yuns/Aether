@@ -99,6 +99,7 @@ impl<T: PartialEq> ConsistentValue<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelFetchStrategyKind {
+    ClinePass,
     PresetCatalog,
     StandardTransport,
     Vertex,
@@ -220,6 +221,7 @@ fn select_model_fetch_strategy(
     }
 
     let kind = match provider_type.as_str() {
+        "clinepass" => ModelFetchStrategyKind::ClinePass,
         "antigravity" => ModelFetchStrategyKind::Antigravity,
         "vertex_ai" => ModelFetchStrategyKind::Vertex,
         "windsurf" => ModelFetchStrategyKind::Windsurf,
@@ -244,6 +246,10 @@ async fn execute_model_fetch_strategy(
     };
 
     match strategy.kind() {
+        ModelFetchStrategyKind::ClinePass => {
+            let models = crate::clinepass::fetch_clinepass_models(runtime, first_transport).await?;
+            Ok(build_success_outcome(models, None, true))
+        }
         ModelFetchStrategyKind::PresetCatalog => Ok(build_success_outcome(
             strategy.preset_models.unwrap_or_default(),
             None,
@@ -1056,7 +1062,7 @@ fn build_vertex_service_account_assertion(
     Ok(format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature)))
 }
 
-fn execution_result_json_body(result: &ExecutionResult) -> Result<Value, String> {
+pub(super) fn execution_result_json_body(result: &ExecutionResult) -> Result<Value, String> {
     if result.status_code != 200 {
         return Err(execution_result_error_message(result));
     }
@@ -2103,6 +2109,17 @@ mod tests {
             &self,
             plan: &aether_contracts::ExecutionPlan,
         ) -> Result<ExecutionResult, String> {
+            if plan.provider_api_format == "clinepass:catalog" {
+                assert_eq!(plan.method, "GET");
+                assert_eq!(plan.url, crate::clinepass::CLINEPASS_CATALOG_URL);
+                assert_eq!(
+                    plan.headers,
+                    BTreeMap::from([("accept".to_string(), "application/json".to_string())])
+                );
+                assert!(plan.body.json_body.is_none());
+                assert!(plan.body.body_bytes_b64.is_none());
+                assert!(plan.body.body_ref.is_none());
+            }
             self.executed_urls
                 .lock()
                 .expect("executed_urls lock")
@@ -2410,6 +2427,38 @@ mod tests {
 
         assert_eq!(strategy.provider_id(), "codex");
         assert_eq!(strategy.kind(), ModelFetchStrategyKind::StandardTransport);
+    }
+
+    #[tokio::test]
+    async fn clinepass_fetches_public_subscription_catalog_without_account_headers() {
+        let mut transport = sample_openai_transport(
+            "clinepass-chat",
+            "openai:chat",
+            "https://api.cline.bot/api/v1",
+        );
+        transport.provider.provider_type = "clinepass".to_string();
+        transport.endpoint.header_rules =
+            Some(json!({"authorization":"account-secret","x-private":"private"}));
+        let strategy = select_model_fetch_strategy(&[transport.clone()]).unwrap();
+        assert_eq!(strategy.kind(), ModelFetchStrategyKind::ClinePass);
+        let runtime = TestRuntime {
+            executed_urls: Arc::new(Mutex::new(Vec::new())),
+            response_body: json!({"cline-pass":{"models":{"deepseek-v4.1-flash":{"name":"Flash"}}}}),
+            status_code: 200,
+            response_headers: BTreeMap::new(),
+        };
+        let outcome = fetch_models_from_transports(&runtime, &[transport])
+            .await
+            .unwrap();
+        assert!(outcome.has_success);
+        assert_eq!(
+            outcome.fetched_model_ids,
+            ["cline-pass/deepseek-v4.1-flash"]
+        );
+        assert_eq!(
+            *runtime.executed_urls.lock().unwrap(),
+            [crate::clinepass::CLINEPASS_CATALOG_URL]
+        );
     }
 
     #[test]

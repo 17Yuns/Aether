@@ -13,6 +13,7 @@
         :status-options="poolKeyStatusFilterOptions"
         :meta-text="poolHeaderMetaText"
         :pool-scheduling-label="poolSchedulingLabel"
+        :import-label="poolUsesApiKeys ? '导入 Key' : '导入账号'"
         :show-adaptive-hot-pool-metrics-button="showAdaptiveHotPoolMetricsButton"
         :selected-count="selectedKeyCount"
         :is-all-filtered-selected="isAllFilteredPoolKeysSelected"
@@ -22,7 +23,7 @@
         :refresh-title="refreshButtonTitle"
         @view-provider="openProviderDrawer"
         @prefetch-provider="prefetchProviderDetailDrawer"
-        @import="showImportDialog = true"
+        @import="openImportDialog"
         @scheduling="openSchedulingDialog"
         @demand-metrics="showDemandMetricsDialog = true"
         @advanced="openAdvancedDialog"
@@ -920,10 +921,10 @@
             variant="outline"
             size="sm"
             class="mt-3"
-            @click="showImportDialog = true"
+            @click="openImportDialog"
           >
             <Upload class="w-3.5 h-3.5 mr-1.5" />
-            添加账号
+            {{ poolUsesApiKeys ? '导入 Key' : '添加账号' }}
           </Button>
         </div>
 
@@ -942,10 +943,20 @@
 
     <!-- Dialogs -->
     <OAuthAccountDialog
-      v-if="selectedProviderId"
+      v-if="selectedProviderId && !poolUsesApiKeys"
       :open="showImportDialog"
       :provider-id="selectedProviderId"
       :provider-type="selectedProviderType || null"
+      @close="showImportDialog = false"
+      @saved="handleAccountDialogSaved"
+    />
+    <ProviderKeyBatchImportDialog
+      v-if="selectedProviderId && poolUsesApiKeys && showImportDialog"
+      :open="showImportDialog"
+      :provider-id="selectedProviderId"
+      :provider-name="selectedProviderData?.name || selectedProviderOverview?.provider_name"
+      :available-api-formats="selectedProviderData?.api_formats || []"
+      allow-bare-keys
       @close="showImportDialog = false"
       @saved="handleAccountDialogSaved"
     />
@@ -1130,6 +1141,8 @@ import KeyAllowedModelsEditDialog from '@/features/providers/components/KeyAllow
 import KeyFormDialog from '@/features/providers/components/KeyFormDialog.vue'
 import OAuthKeyEditDialog from '@/features/providers/components/OAuthKeyEditDialog.vue'
 import OAuthAccountDialog from '@/features/providers/components/OAuthAccountDialog.vue'
+import ProviderKeyBatchImportDialog from '@/features/providers/components/ProviderKeyBatchImportDialog.vue'
+import { isKeyManagedProviderType } from '@/features/providers/utils/providerTypeUtils'
 import ProviderFormDialog from '@/features/providers/components/ProviderFormDialog.vue'
 import ProxyNodeSelect from '@/features/providers/components/ProxyNodeSelect.vue'
 import {
@@ -1759,6 +1772,7 @@ async function selectProvider(
   hasHydratedInitialProviderSelection = true
   selectedProviderId.value = id
   selectedProviderData.value = null
+  showImportDialog.value = false
   showSchedulingDialog.value = false
   showAdvancedDialog.value = false
   resetPoolKeySelection(true)
@@ -3047,6 +3061,7 @@ async function toggleKeyActive(key: PoolKeyDetail) {
 
 // --- Dialogs ---
 const showImportDialog = ref(false)
+const poolUsesApiKeys = computed(() => !!selectedProviderType.value && isKeyManagedProviderType(selectedProviderType.value))
 const showSchedulingDialog = ref(false)
 const showAdvancedDialog = ref(false)
 const providerDrawerOpen = ref(false)
@@ -3056,6 +3071,14 @@ const providerToEdit = ref<ProviderWithEndpointsSummary | null>(null)
 const showAccountBatchDialog = ref(false)
 const pendingAccountBatchAction = ref<PoolBatchActionValue | null>(null)
 const togglingProviderStatus = ref(false)
+
+async function openImportDialog() {
+  const providerId = selectedProviderId.value
+  if (!providerId) return
+  if (poolUsesApiKeys.value && !await ensureSelectedProviderDetail()) return
+  if (selectedProviderId.value !== providerId) return
+  showImportDialog.value = true
+}
 
 async function ensureSelectedProviderDetail(): Promise<boolean> {
   const providerId = selectedProviderId.value

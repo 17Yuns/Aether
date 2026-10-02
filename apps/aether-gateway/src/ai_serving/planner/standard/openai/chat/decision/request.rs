@@ -172,6 +172,27 @@ fn finalize_openai_chat_provider_request_body(
         )
     });
     if finalization_failure.is_none() {
+        if transport
+            .provider
+            .provider_type
+            .eq_ignore_ascii_case("clinepass")
+        {
+            if let Err(error) = crate::ai_serving::transport::apply_transport_request_body_semantics(
+                provider_request_body,
+                transport,
+                provider_api_format,
+            ) {
+                return Some(
+                    CandidateFailureDiagnostic::request_conversion_failed(
+                        "openai:chat",
+                        provider_api_format,
+                        "clinepass_request_preferences",
+                        error.to_string(),
+                    )
+                    .to_extra_data(),
+                );
+            }
+        }
         // This builder does not go through `apply_transport_request_body_semantics`, so the
         // Claude Code body mimicry must be applied here for Chat -> claude_code requests.
         crate::ai_serving::transport::claude_code::apply_claude_code_body_mimicry_for_transport(
@@ -2404,6 +2425,43 @@ mod tests {
                 })),
             );
         input
+    }
+
+    #[test]
+    fn clinepass_chat_finalization_applies_channel_order_and_stream_usage() {
+        let mut transport = sample_custom_deepseek_responses_transport();
+        transport.provider.provider_type = "clinepass".to_string();
+        transport.provider.config = Some(json!({"clinepass":{"models":{
+            "cline-pass/deepseek-v4.1-flash":{
+                "only":["deepseek","baseten"],"pipeline":"planner"
+            }
+        }}}));
+        transport.endpoint.api_format = "openai:chat".to_string();
+        let mut body = json!({
+            "model":"cline-pass/deepseek-v4.1-flash",
+            "messages":[{"role":"user","content":"Hello"}],"stream":true
+        });
+        let original = body.clone();
+        assert!(finalize_openai_chat_provider_request_body(
+            &mut body,
+            None,
+            "openai:chat",
+            true,
+            false,
+            &original,
+            &transport,
+            "cline-pass/deepseek-v4.1-flash",
+        )
+        .is_none());
+        assert_eq!(
+            body["providerOptions"]["gateway"]["only"],
+            json!(["deepseek", "baseten"])
+        );
+        assert_eq!(
+            body["providerOptions"]["gateway"]["order"],
+            json!(["deepseek", "baseten"])
+        );
+        assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
     #[test]

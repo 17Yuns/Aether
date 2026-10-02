@@ -25,7 +25,10 @@ function splitNamedKey(line: string): { name: string; apiKey: string } | null {
   }
 }
 
-export function parseProviderKeyBatchImport(input: string): ProviderKeyBatchImportParseResult {
+export function parseProviderKeyBatchImport(
+  input: string,
+  options: { allowBareKeys?: boolean; namePrefix?: string } = {},
+): ProviderKeyBatchImportParseResult {
   const items: ProviderKeyBatchImportItem[] = []
   const errors: ProviderKeyBatchImportError[] = []
   const seenKeys = new Set<string>()
@@ -36,7 +39,9 @@ export function parseProviderKeyBatchImport(input: string): ProviderKeyBatchImpo
     const line = rawLine.trim()
     if (!line || line.startsWith('#')) continue
 
-    const named = splitNamedKey(line)
+    const named = splitNamedKey(line) ?? (options.allowBareKeys
+      ? { name: `${(options.namePrefix || 'Key').slice(0, 80)}-${lineNumber}`, apiKey: line }
+      : null)
     if (!named) {
       errors.push({ lineNumber, message: `格式应为 名称${PROVIDER_KEY_BATCH_SEPARATOR}Key` })
       continue

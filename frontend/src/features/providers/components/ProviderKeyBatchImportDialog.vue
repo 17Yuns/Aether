@@ -2,7 +2,7 @@
   <Dialog
     :model-value="open"
     title="批量导入 Key"
-    :description="providerName ? `${providerName} · 名称和 Key 均为必填` : '名称和 Key 均为必填'"
+    :description="[providerName, allowBareKeys ? '直接粘贴 Key，每行一个，名称自动生成' : '名称和 Key 均为必填'].filter(Boolean).join(' · ')"
     :icon="ListPlus"
     size="4xl"
     persistent
@@ -41,10 +41,10 @@
             <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-xs font-semibold text-background">1</span>
             <div class="min-w-0">
               <h3 class="text-balance text-sm font-semibold text-foreground">
-                粘贴名称与 Key
+                {{ allowBareKeys ? '粘贴 API Key' : '粘贴名称与 Key' }}
               </h3>
               <p class="text-pretty text-[11px] leading-4 text-muted-foreground">
-                每行一条，仅接受四个短横线分隔
+                {{ allowBareKeys ? '每行一个 Key，也支持 名称----Key' : '每行一条，仅接受四个短横线分隔' }}
               </p>
             </div>
           </div>
@@ -66,7 +66,7 @@
             v-model="inputText"
             class="h-[280px] min-h-[220px] max-h-[520px] !resize-y !rounded-none !border-0 !bg-transparent !px-4 !py-4 font-mono text-[13px] leading-6 !shadow-none !ring-0 focus-visible:!ring-0"
             spellcheck="false"
-            placeholder="主账号----sk-xxxx&#10;备用账号----sk-yyyy"
+            :placeholder="allowBareKeys ? 'sk-xxxx\nsk-yyyy\n备用账号----sk-zzzz' : '主账号----sk-xxxx\n备用账号----sk-yyyy'"
           />
           <div
             v-if="parsed.errors.length > 0"
@@ -87,7 +87,7 @@
           </div>
           <div class="flex flex-wrap items-center gap-2 border-t border-border/50 bg-muted/10 px-4 py-2.5 text-[11px] text-muted-foreground">
             <span class="rounded-md bg-muted px-2 py-1 font-mono text-foreground/80">名称----Key</span>
-            <span>名称和 Key 都不能为空</span>
+            <span>{{ allowBareKeys ? '未填写名称时自动生成，可在确认时修改' : '名称和 Key 都不能为空' }}</span>
             <span class="ml-auto hidden tabular-nums sm:inline">已识别 {{ parsed.items.length }} 条</span>
           </div>
         </div>
@@ -384,6 +384,7 @@ const props = defineProps<{
   providerId: string
   providerName?: string
   availableApiFormats: string[]
+  allowBareKeys?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -401,6 +402,7 @@ const steps: ReadonlyArray<{ id: WizardStep; label: string }> = [
 const { success, warning, error: showError } = useToast()
 const currentStep = ref<WizardStep>(1)
 const inputText = ref('')
+const importNamePrefix = ref('Key')
 const importing = ref(false)
 const authType = ref<AuthType>('api_key')
 const selectedApiFormats = ref<string[]>([])
@@ -409,7 +411,10 @@ const reviewItems = ref<ReviewImportItem[]>([])
 const reviewPage = ref(1)
 const editingItemIndex = ref<number | null>(null)
 
-const parsed = computed(() => parseProviderKeyBatchImport(inputText.value))
+const parsed = computed(() => parseProviderKeyBatchImport(inputText.value, {
+  allowBareKeys: props.allowBareKeys,
+  namePrefix: importNamePrefix.value,
+}))
 const canContinueInput = computed(() => (
   parsed.value.items.length > 0 && parsed.value.errors.length === 0
 ))
@@ -490,6 +495,7 @@ watch(
     if (!open) return
     currentStep.value = 1
     inputText.value = ''
+    importNamePrefix.value = `${(props.providerName || 'Key').slice(0, 60)}-${Date.now()}`
     importing.value = false
     authType.value = 'api_key'
     selectedApiFormats.value = [...props.availableApiFormats]

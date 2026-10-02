@@ -46,4 +46,23 @@ describe('provider key batch import parser', () => {
     expect(result.items).toHaveLength(750)
     expect(result.errors).toEqual([])
   })
+
+  it('accepts bare API keys with generated names and optional explicit names', () => {
+    const result = parseProviderKeyBatchImport('  sk-first  \n\nbackup----sk-second\nsk-third', {
+      allowBareKeys: true,
+      namePrefix: 'ClinePass-import',
+    })
+    expect(result.errors).toEqual([])
+    expect(result.items).toEqual([
+      { lineNumber: 1, name: 'ClinePass-import-1', apiKey: 'sk-first' },
+      { lineNumber: 3, name: 'backup', apiKey: 'sk-second' },
+      { lineNumber: 4, name: 'ClinePass-import-4', apiKey: 'sk-third' },
+    ])
+  })
+
+  it('still rejects duplicates across bare and named entries', () => {
+    const result = parseProviderKeyBatchImport('sk-first\nbackup----sk-first\nsk-second', { allowBareKeys: true })
+    expect(result.errors).toEqual([{ lineNumber: 2, message: 'Key 与前面行重复' }])
+    expect(result.items.map(item => item.name)).toEqual(['Key-1', 'Key-3'])
+  })
 })

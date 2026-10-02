@@ -314,6 +314,35 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         return Ok(None);
     }
 
+    if transport
+        .provider
+        .provider_type
+        .eq_ignore_ascii_case("clinepass")
+    {
+        if let Err(error) = crate::ai_serving::transport::apply_transport_request_body_semantics(
+            &mut base_provider_request_body,
+            &transport,
+            prepared.provider_api_format.as_str(),
+        ) {
+            mark_skipped_local_same_format_provider_candidate_with_failure_diagnostic(
+                state,
+                input,
+                trace_id,
+                candidate,
+                attempt.candidate_index,
+                &attempt.candidate_id,
+                "transport_request_body_semantics_failed",
+                CandidateFailureDiagnostic::request_conversion_failed(
+                    spec.api_format,
+                    prepared.provider_api_format.as_str(),
+                    "clinepass_request_preferences",
+                    error.to_string(),
+                ),
+            )
+            .await;
+            return Ok(None);
+        }
+    }
     // Same-format requests skip `apply_transport_request_body_semantics`, so the opt-in
     // Claude Code body mimicry has to be applied here as well.
     if crate::ai_serving::transport::claude_code::apply_claude_code_body_mimicry_for_transport(

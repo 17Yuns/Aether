@@ -3355,6 +3355,22 @@ async fn provider_query_execute_standard_test_candidate(
             "Provider request body violates the OpenAI provider contract",
         ));
     }
+    if transport
+        .provider
+        .provider_type
+        .eq_ignore_ascii_case("clinepass")
+    {
+        if let Err(error) = crate::provider_transport::apply_transport_request_body_semantics(
+            &mut provider_request_body,
+            &transport,
+            normalized_provider_api_format.as_str(),
+        ) {
+            return Ok(provider_query_skipped_execution_outcome(
+                provider_request_body,
+                format!("ClinePass request preferences are invalid: {error}"),
+            ));
+        }
+    }
     if crate::provider_transport::is_gemini_cli_provider_transport(&transport)
         && normalized_provider_api_format == "gemini:generate_content"
     {

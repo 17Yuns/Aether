@@ -14,13 +14,14 @@ const provider = {
 } as PoolOverviewItem
 
 describe('PoolManagementHeader', () => {
-  it('keeps page actions wired through component events', async () => {
+  it.each([undefined, '导入 Key'])('keeps page actions wired with import label %s', async (importLabel) => {
     const events: string[] = []
     const Probe = defineComponent({
       setup() {
         return () => h(PoolManagementHeader, {
           providers: [provider],
           providerId: 'provider-1',
+          importLabel,
           providerSelectDisabled: false,
           status: 'all',
           statusOptions: [{ value: 'all', label: '全部状态' }],
@@ -56,7 +57,7 @@ describe('PoolManagementHeader', () => {
     const mobileViewProviderButton = root.querySelector<HTMLButtonElement>('[title="查看详情"]')
     mobileViewProviderButton?.dispatchEvent(new Event('pointerenter'))
     mobileViewProviderButton?.click()
-    root.querySelector<HTMLButtonElement>('[title="导入账号"]')?.click()
+    root.querySelector<HTMLButtonElement>(`[title="${importLabel || '导入账号'}"]`)?.click()
     root.querySelector<HTMLButtonElement>('[title="点击调整号池调度"]')?.click()
     root.querySelector<HTMLButtonElement>('[title="查看自适应热池指标"]')?.click()
     const desktopActions = root.querySelector('[data-testid="pool-header-actions"]')
@@ -83,7 +84,7 @@ describe('PoolManagementHeader', () => {
       'refresh',
     ])
     const viewProviderButton = desktopActions?.querySelector<HTMLButtonElement>('[title="查看详情"]')
-    const importButton = desktopActions?.querySelector<HTMLButtonElement>('[title="导入账号"]')
+    const importButton = desktopActions?.querySelector<HTMLButtonElement>(`[title="${importLabel || '导入账号'}"]`)
     expect(selectAllButton?.textContent?.trim()).toBe('')
     expect(selectAllButton?.getAttribute('title')).toBe('全选')
     expect(viewProviderButton?.nextElementSibling).toBe(importButton)

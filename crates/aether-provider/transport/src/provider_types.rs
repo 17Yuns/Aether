@@ -300,7 +300,7 @@ const CLINEPASS_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTe
         fixed_provider: true,
         api_format_inheritance: ProviderApiFormatInheritance::OAuthOrBearer,
         enable_format_conversion_by_default: true,
-        supports_model_fetch: false,
+        supports_model_fetch: true,
         ..STANDARD_RUNTIME_POLICY
     },
 };
@@ -722,6 +722,7 @@ mod tests {
         assert!(template.runtime_policy.enable_format_conversion_by_default);
         assert!(template.runtime_policy.supports_local_openai_chat_transport);
         assert!(provider_type_admin_oauth_template("clinepass").is_none());
+        assert!(template.runtime_policy.supports_model_fetch);
     }
 
     #[test]

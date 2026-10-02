@@ -635,6 +635,38 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts_with_
     {
         log_responses_to_chat_tool_conversion(trace_id, body_json, &base_provider_request_body);
     }
+    if transport
+        .provider
+        .provider_type
+        .eq_ignore_ascii_case("clinepass")
+    {
+        if let Err(error) = crate::ai_serving::transport::apply_transport_request_body_semantics(
+            &mut base_provider_request_body,
+            &transport,
+            provider_api_format,
+        ) {
+            mark_skipped_local_openai_responses_candidate_with_extra_data(
+                state,
+                input,
+                trace_id,
+                candidate,
+                candidate_index,
+                candidate_id,
+                "provider_request_body_build_failed",
+                Some(
+                    CandidateFailureDiagnostic::request_conversion_failed(
+                        spec_metadata.api_format,
+                        provider_api_format,
+                        "clinepass_request_preferences",
+                        error.to_string(),
+                    )
+                    .to_extra_data(),
+                ),
+            )
+            .await;
+            return Ok(None);
+        }
+    }
     // This builder does not go through `apply_transport_request_body_semantics`, so the
     // Claude Code body mimicry must be applied here for Responses -> claude_code requests.
     crate::ai_serving::transport::claude_code::apply_claude_code_body_mimicry_for_transport(

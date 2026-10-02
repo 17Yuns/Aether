@@ -66,7 +66,7 @@
                     </h3>
                     <div class="flex flex-wrap items-center justify-end gap-2">
                       <Button
-                        v-if="endpoints.length > 0 && provider.provider_type === 'custom'"
+                        v-if="endpoints.length > 0 && (provider.provider_type === 'custom' || provider.provider_type === 'clinepass')"
                         variant="outline"
                         size="sm"
                         class="h-9"
@@ -960,11 +960,12 @@
   />
 
   <ProviderKeyBatchImportDialog
-    v-if="open && keyBatchImportDialogOpen && provider?.provider_type === 'custom'"
+    v-if="open && keyBatchImportDialogOpen && provider && (provider.provider_type === 'custom' || provider.provider_type === 'clinepass')"
     :open="keyBatchImportDialogOpen"
     :provider-id="provider.id"
     :provider-name="provider.name"
     :available-api-formats="availableKeyApiFormats"
+    :allow-bare-keys="provider.provider_type === 'clinepass'"
     @close="keyBatchImportDialogOpen = false"
     @saved="handleKeyChanged"
   />
@@ -1018,6 +1019,7 @@
     :open="modelFormDialogOpen"
     :provider-id="provider.id"
     :provider-name="provider.name"
+    :provider-type="provider.provider_type"
     :editing-model="editingModel"
     @update:open="modelFormDialogOpen = $event"
     @saved="handleModelSaved"
