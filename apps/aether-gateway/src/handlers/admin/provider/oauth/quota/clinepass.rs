@@ -117,7 +117,7 @@ pub(crate) async fn refresh_clinepass_provider_quota_locally(
         };
         let Some(stored) = state
             .app()
-            .list_provider_catalog_keys_by_ids_strong(&[key.id.clone()])
+            .list_provider_catalog_keys_by_ids_strong(std::slice::from_ref(&key.id))
             .await?
             .into_iter()
             .next()

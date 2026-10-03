@@ -66,7 +66,7 @@ fn gateway_provider_regressions_jev_create_and_manual_native_endpoint() {
                     .find(|provider| provider.name == name)
                     .unwrap();
                 let endpoints = repository
-                    .list_endpoints_by_provider_ids(&[created.id.clone()])
+                    .list_endpoints_by_provider_ids(std::slice::from_ref(&created.id))
                     .await
                     .unwrap();
                 assert_eq!(endpoints.len(), 1);
