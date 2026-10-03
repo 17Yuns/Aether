@@ -2867,6 +2867,28 @@ WHERE id = $1
             tx.rollback().await.map_postgres_err()?;
             return Ok(false);
         }
+        if let Some(expected) = update.expected_credential.as_ref() {
+            let matches: bool = sqlx::query_scalar(
+                r#"SELECT EXISTS (
+                    SELECT 1 FROM provider_api_keys k
+                    JOIN providers p ON p.id = k.provider_id
+                    WHERE k.id = $1 AND k.api_key IS NOT DISTINCT FROM $2
+                      AND k.auth_type = $3 AND k.provider_id = $4 AND p.provider_type = $5
+                )"#,
+            )
+            .bind(&update.key_id)
+            .bind(expected.encrypted_api_key.as_deref())
+            .bind(&expected.auth_type)
+            .bind(&expected.provider_id)
+            .bind(&expected.provider_type)
+            .fetch_one(&mut *tx)
+            .await
+            .map_postgres_err()?;
+            if !matches {
+                tx.rollback().await.map_postgres_err()?;
+                return Ok(false);
+            }
+        }
         let rows_affected = sqlx::query(KEY_RUNTIME_METADATA_UPDATE_SQL)
             .bind(&update.key_id)
             .bind(&update.namespace)
@@ -3988,6 +4010,7 @@ VALUES ($1, $2, $3, 0, 0, $4::jsonb)
         let updated = repository
             .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                 key_id: key_id.clone(),
+                expected_credential: None,
                 namespace: "antigravity".to_string(),
                 expected_upstream_metadata_value: Some(observed),
                 upstream_metadata_value: json!({"used_percent": 12.5}),
@@ -4009,6 +4032,34 @@ VALUES ($1, $2, $3, 0, 0, $4::jsonb)
         .await
         .expect("updated metadata namespace should load");
         assert_eq!(stored, json!({"used_percent": 12.5}));
+
+        sqlx::query("UPDATE provider_api_keys SET api_key = 'rotated-key' WHERE id = $1")
+            .bind(&key_id)
+            .execute(repository.pool())
+            .await
+            .unwrap();
+        let mut credential_update = ProviderCatalogKeyRuntimeMetadataUpdate {
+            key_id: key_id.clone(), namespace: "clinepass".to_string(),
+            expected_credential: Some(aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyOAuthCredentialFence {
+                encrypted_api_key: None, auth_type: "api_key".to_string(),
+                provider_id: provider_id.clone(), provider_type: "antigravity".to_string(),
+            }),
+            expected_upstream_metadata_value: None, upstream_metadata_value: json!({"remaining":0.9}),
+            status_snapshot_patch: json!({"quota":{"remaining":0.9}}), updated_at_unix_secs: Some(1_700_000_001),
+        };
+        assert!(!repository
+            .update_key_runtime_metadata(&credential_update)
+            .await
+            .unwrap());
+        credential_update
+            .expected_credential
+            .as_mut()
+            .unwrap()
+            .encrypted_api_key = Some("rotated-key".to_string());
+        assert!(repository
+            .update_key_runtime_metadata(&credential_update)
+            .await
+            .unwrap());
 
         sqlx::query("DELETE FROM provider_api_keys WHERE id = $1")
             .bind(&key_id)

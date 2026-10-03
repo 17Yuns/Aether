@@ -7,7 +7,20 @@ import { updateModel } from '@/api/endpoints/models'
 
 const upstreamModelMocks = vi.hoisted(() => ({
   fetchModels: vi.fn(),
+  getProvider: vi.fn(),
+  updateProvider: vi.fn(),
 }))
+
+vi.mock('@/api/endpoints/providers', () => upstreamModelMocks)
+vi.mock('../ClinePassModelChannelFilter.vue', () => ({ default: defineComponent({
+  props: { providerId: String, modelName: String, modelValue: Object },
+  emits: ['update:modelValue'],
+  setup: (props, { emit }) => () => h('button', {
+    'data-probe-model': props.modelName,
+    'data-probe-provider': props.providerId,
+    onClick: () => emit('update:modelValue', { ...props.modelValue, only: ['baseten'] }),
+  }, '选择渠道 baseten'),
+}) }))
 
 vi.mock('@/components/ui', async () => {
   const { defineComponent, h } = await import('vue')
@@ -119,6 +132,8 @@ const mountedApps: Array<{ app: App, root: HTMLElement }> = []
 afterEach(() => {
   vi.mocked(updateModel).mockClear()
   upstreamModelMocks.fetchModels.mockReset()
+  upstreamModelMocks.getProvider.mockReset()
+  upstreamModelMocks.updateProvider.mockReset()
   for (const { app, root } of mountedApps.splice(0)) {
     app.unmount()
     root.remove()
@@ -126,6 +141,38 @@ afterEach(() => {
 })
 
 describe('ModelMappingDialog', () => {
+  it('stores channel filters with the selected upstream mapping and preserves other model rules', async () => {
+    const name = 'cline-pass/deepseek-v4.1-flash'
+    const rule = { only: ['deepseek'], exclude: [], available_channels: ['deepseek', 'baseten'], pipeline: 'direct' }
+    const other = 'cline-pass/glm-5.3'
+    upstreamModelMocks.getProvider.mockResolvedValue({ clinepass: { models: { [name]: rule, [other]: { ...rule, only: ['zai'] } } } })
+    upstreamModelMocks.updateProvider.mockResolvedValue(undefined)
+    const model = { id: 'model-1', provider_id: 'provider-1', provider_model_name: 'deepseek-v4.1-flash',
+      provider_model_mappings: [{ name, priority: 1 }], is_active: true, is_available: true } as Model
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const app = createApp(defineComponent({ setup: () => () => h(ModelMappingDialog, {
+      open: true, providerId: 'provider-1', providerType: 'clinepass', models: [model],
+      editingGroup: { model, aliases: [{ name, priority: 1 }], apiFormats: [], apiFormatsKey: '',
+        endpointIds: [], endpointIdsKey: '', operations: [], operationsKey: '' },
+    }) }))
+    app.mount(root)
+    mountedApps.push({ app, root })
+    await vi.waitFor(() => expect(root.querySelector('[data-probe-provider="provider-1"]')).not.toBeNull())
+    const filter = root.querySelector<HTMLButtonElement>('[data-probe-model]')!
+    expect(filter.dataset.probeModel).toBe(name)
+    filter.click()
+    await nextTick()
+    expect(upstreamModelMocks.updateProvider).not.toHaveBeenCalled()
+    ;[...root.querySelectorAll('button')].find(button => button.textContent?.trim() === '保存映射')!.click()
+    await vi.waitFor(() => expect(updateModel).toHaveBeenCalled())
+    expect(upstreamModelMocks.updateProvider).toHaveBeenCalledWith('provider-1', { config: { clinepass: { models: {
+      [name]: { ...rule, only: ['baseten'] }, [other]: { ...rule, only: ['zai'] },
+    } } } })
+    expect(updateModel).toHaveBeenCalledWith('provider-1', 'model-1', expect.objectContaining({
+      provider_model_mappings: [expect.objectContaining({ name })],
+    }))
+  })
   it('initializes upstream models when lazily mounted in the open state', async () => {
     upstreamModelMocks.fetchModels.mockResolvedValue({
       models: [],

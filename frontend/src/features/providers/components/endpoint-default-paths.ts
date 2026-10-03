@@ -99,6 +99,7 @@ function usesVersionedApiRootByDefault(apiFormat: string): boolean {
     || apiFormat === 'codex:live'
     || apiFormat === 'jina:embedding'
     || apiFormat === 'jina:rerank'
+    || apiFormat === 'typesafe:systemone'
     || apiFormat === 'claude:messages'
     || apiFormat === 'gemini:generate_content'
     || apiFormat === 'gemini:interactions'

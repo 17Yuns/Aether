@@ -12,6 +12,7 @@ mod payments;
 mod pool;
 mod provider_ops;
 mod provider_query;
+mod provider_regressions;
 mod provider_strategy;
 mod providers;
 mod proxy_nodes;

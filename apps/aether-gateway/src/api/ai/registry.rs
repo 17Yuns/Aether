@@ -7,7 +7,7 @@ use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode, Uri};
 use axum::routing::{any, get, post};
 use axum::Router;
 
-use super::{aliyun, claude, doubao, gemini, jina, openai};
+use super::{aliyun, claude, doubao, gemini, jina, openai, typesafe};
 use crate::api::response::build_local_http_error_response_with_request_path;
 use crate::headers::extract_or_generate_trace_id;
 use crate::{
@@ -20,6 +20,8 @@ use crate::{
 // They intentionally stay separate from manifest-facing route inventories in constants.rs,
 // which describe operational compatibility surfaces rather than the concrete axum mount list.
 const AI_POST_ROUTE_PATTERNS: &[&str] = &[
+    "/v1/systemone",
+    "/jev/v1/systemone",
     "/v1/chat/completions",
     "/v1/embeddings",
     "/v1/rerank",
@@ -162,6 +164,7 @@ pub(crate) fn public_api_format_local_path(api_format: &str) -> &'static str {
         .or_else(|| jina::local_path(&normalized))
         .or_else(|| doubao::local_path(&normalized))
         .or_else(|| aliyun::local_path(&normalized))
+        .or_else(|| typesafe::local_path(&normalized))
         .unwrap_or("/")
 }
 
@@ -173,6 +176,7 @@ pub(crate) fn normalize_admin_endpoint_signature(api_format: &str) -> Option<&'s
         .or_else(|| jina::normalized_signature(&normalized))
         .or_else(|| doubao::normalized_signature(&normalized))
         .or_else(|| aliyun::normalized_signature(&normalized))
+        .or_else(|| typesafe::normalized_signature(&normalized))
 }
 
 pub(crate) fn admin_endpoint_signature_parts(
@@ -290,6 +294,12 @@ mod tests {
             ("openai:realtime", "openai", "realtime", "/v1/realtime"),
             ("codex:live", "codex", "live", "/v1/live"),
             ("jina:rerank", "jina", "rerank", "/v1/rerank"),
+            (
+                "typesafe:systemone",
+                "typesafe",
+                "systemone",
+                "/v1/systemone",
+            ),
         ] {
             assert_eq!(
                 admin_endpoint_signature_parts(api_format),

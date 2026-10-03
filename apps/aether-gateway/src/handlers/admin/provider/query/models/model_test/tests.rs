@@ -265,7 +265,7 @@ fn provider_query_default_test_request_bodies_do_not_set_temperature() {
 }
 
 #[test]
-fn provider_query_failover_request_body_overrides_custom_model() {
+fn provider_query_failover_request_body_preserves_visible_model() {
     let payload = json!({
         "request_body": {
             "model": "custom-upstream-model",
@@ -279,11 +279,11 @@ fn provider_query_failover_request_body_overrides_custom_model() {
         "/api/admin/provider-query/test-model-failover",
     );
 
-    assert_eq!(body["model"], json!("failover-model"));
+    assert_eq!(body["model"], json!("custom-upstream-model"));
 }
 
 #[test]
-fn provider_query_failover_request_body_uses_explicit_mapped_model() {
+fn provider_query_failover_request_body_preserves_model_despite_mapping_metadata() {
     let payload = json!({
         "mapped_model_name": "upstream-mapped-model",
         "request_body": {
@@ -298,7 +298,7 @@ fn provider_query_failover_request_body_uses_explicit_mapped_model() {
         "/api/admin/provider-query/test-model-failover",
     );
 
-    assert_eq!(body["model"], json!("upstream-mapped-model"));
+    assert_eq!(body["model"], json!("original-selected-model"));
 }
 
 #[test]

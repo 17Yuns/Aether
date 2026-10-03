@@ -1284,6 +1284,31 @@ mod tests {
     }
 
     #[test]
+    fn jev_systemone_url_uses_v1_base_and_relative_default_or_custom_path() {
+        for custom_path in [None, Some("/systemone")] {
+            let transport = sample_transport(
+                "jev",
+                "typesafe:systemone",
+                "https://api.typesafe.ai/v1",
+                custom_path,
+            );
+            let url = build_transport_request_url(
+                &transport,
+                TransportRequestUrlParams {
+                    provider_api_format: "typesafe:systemone",
+                    mapped_model: Some("jev-latest"),
+                    upstream_is_stream: false,
+                    request_query: None,
+                    kiro_api_region: None,
+                    api_operation: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(url, "https://api.typesafe.ai/v1/systemone");
+        }
+    }
+
+    #[test]
     fn rewrites_hardcoded_gemini_custom_path_action_to_match_stream_mode() {
         let stream_transport = sample_transport(
             "custom",

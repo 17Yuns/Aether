@@ -966,6 +966,7 @@
     :provider-name="provider.name"
     :available-api-formats="availableKeyApiFormats"
     :allow-bare-keys="provider.provider_type !== 'custom'"
+    :fixed-api-key-auth="['clinepass', 'jev'].includes(provider.provider_type)"
     @close="keyBatchImportDialogOpen = false"
     @saved="handleKeyChanged"
   />

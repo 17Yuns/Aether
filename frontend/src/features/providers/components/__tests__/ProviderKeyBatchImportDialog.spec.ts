@@ -22,7 +22,7 @@ describe('API key pool import', () => {
     let saved = false
     app = createApp(defineComponent({ setup: () => () => h(ProviderKeyBatchImportDialog, {
       open: true, providerId: 'provider-1', providerName,
-      allowBareKeys: true, availableApiFormats: [apiFormat], onSaved: () => { saved = true },
+      allowBareKeys: true, fixedApiKeyAuth: true, availableApiFormats: [apiFormat], onSaved: () => { saved = true },
     }) }))
     app.mount(root)
     await nextTick()

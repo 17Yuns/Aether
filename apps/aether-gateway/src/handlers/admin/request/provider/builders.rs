@@ -258,6 +258,9 @@ impl<'a> AdminAppState<'a> {
         let (normalized_api_format, api_family, endpoint_kind) =
             admin_endpoint_signature_parts(&payload.api_format)
                 .ok_or_else(|| format!("无效的 api_format: {}", payload.api_format))?;
+        if provider.provider_type == "jev" && normalized_api_format != "typesafe:systemone" {
+            return Err("Jev 仅支持 System One 端点".to_string());
+        }
         validate_admin_endpoint_stream_policy(normalized_api_format, payload.config.as_ref())?;
         crate::provider_transport::validate_anthropic_compatibility_profile_config(
             payload.config.as_ref(),

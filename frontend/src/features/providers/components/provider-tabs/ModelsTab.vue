@@ -448,7 +448,7 @@ const testKeyOptions = computed(() => {
     }))
 })
 const effectiveTestRequestModelName = computed(() => (
-  mappedTestModelName.value || pendingRequestedModelName.value
+  mappedTestModelName.value || pendingTestModel.value?.provider_model_name || pendingRequestedModelName.value
 ))
 const models = computed(() => props.models ?? localModels.value)
 const isLoading = computed(() => Boolean(props.loading) || localLoading.value)
@@ -800,8 +800,8 @@ async function testModelConnection(model: Model) {
   pendingTestModel.value = model
   selectedTestEndpoint.value = selectPreferredModelTestEndpoint(model, activeEndpoints.value)
   selectedTestClientApiFormat.value = null
-  const requestedModelName = getModelTestRequestedModelName(model)
-  selectedTestMappedModelName.value = null
+  selectedTestMappedModelName.value = testModelMappingOptions.value[0]?.name ?? null
+  const requestedModelName = effectiveTestRequestModelName.value
   selectedTestKeyIds.value = []
   testRequestHeadersResetValue.value = buildDefaultModelTestRequestHeaders()
   testRequestHeadersDraft.value = testRequestHeadersResetValue.value
@@ -870,7 +870,7 @@ function syncSelectedTestModelMapping(preferredName?: string | null) {
     return
   }
   const preferred = preferredName ?? selectedTestMappedModelName.value
-  selectedTestMappedModelName.value = normalizeModelTestMappedModelSelection(options, preferred)
+  selectedTestMappedModelName.value = normalizeModelTestMappedModelSelection(options, preferred) ?? options[0]?.name ?? null
 }
 
 function syncTestRequestBodyModel() {

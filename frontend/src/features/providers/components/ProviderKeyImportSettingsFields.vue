@@ -21,7 +21,10 @@
     </div>
 
     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <div class="space-y-1.5">
+      <div
+        v-if="!fixedApiKeyAuth"
+        class="space-y-1.5"
+      >
         <Label class="text-xs">认证类型</Label>
         <Select v-model="authTypeModel">
           <SelectTrigger class="h-10">
@@ -160,6 +163,7 @@ const props = defineProps<{
   apiFormats: string[]
   settings: ImportSettings
   availableApiFormats: string[]
+  fixedApiKeyAuth?: boolean
 }>()
 
 const emit = defineEmits<{

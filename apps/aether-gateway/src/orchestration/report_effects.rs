@@ -353,6 +353,7 @@ async fn sync_gemini_cli_credits_from_report(
     let persisted = state
         .update_provider_catalog_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
             key_id: key_id.clone(),
+            expected_credential: None,
             namespace: "gemini_cli".to_string(),
             expected_upstream_metadata_value: expected_namespace_value,
             upstream_metadata_value: namespace_value,
@@ -528,6 +529,7 @@ async fn sync_grok_quota_from_report_context(
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: key_id.clone(),
+                    expected_credential: None,
                     namespace: "grok".to_string(),
                     expected_upstream_metadata_value: expected_namespace_value,
                     upstream_metadata_value: namespace_value,
@@ -1039,6 +1041,7 @@ async fn sync_claude_code_quota_from_response_headers(
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: key_id.clone(),
+                    expected_credential: None,
                     namespace: "claude_code".to_string(),
                     expected_upstream_metadata_value: expected_namespace_value,
                     upstream_metadata_value: next_bucket,
@@ -1197,6 +1200,7 @@ async fn sync_codex_quota_metadata_with_observation(
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: key_id.clone(),
+                    expected_credential: None,
                     namespace: "codex".to_string(),
                     expected_upstream_metadata_value: expected_namespace_value,
                     upstream_metadata_value: next_codex,

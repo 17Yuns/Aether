@@ -82,7 +82,7 @@ use uuid::Uuid;
 
 mod adapter;
 mod capabilities;
-mod model_mapping;
+pub(crate) mod model_mapping;
 mod summary;
 
 #[cfg(test)]
@@ -497,6 +497,16 @@ fn provider_query_extract_request_body(payload: &Value) -> Option<Value> {
         .cloned()
 }
 
+fn provider_query_explicit_request_body_model(payload: &Value) -> Option<&str> {
+    payload
+        .pointer("/request_body/model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| {
+            !model.is_empty() && model.len() <= 256 && !model.chars().any(char::is_control)
+        })
+}
+
 fn provider_query_extract_request_headers(payload: &Value) -> HeaderMap {
     let mut headers = HeaderMap::new();
     let Some(values) = payload.get("request_headers").and_then(Value::as_object) else {
@@ -536,11 +546,9 @@ fn provider_query_build_test_request_body(payload: &Value, model: &str) -> Value
 fn provider_query_build_test_request_body_for_route(
     payload: &Value,
     model: &str,
-    route_path: &str,
+    _route_path: &str,
 ) -> Value {
-    let override_custom_model = route_path.ends_with("/test-model-failover")
-        || provider_query_extract_mapped_model_name(payload).is_some();
-    provider_query_build_test_request_body_with_model_policy(payload, model, override_custom_model)
+    provider_query_build_test_request_body(payload, model)
 }
 
 fn provider_query_build_test_request_body_for_api_format(
@@ -561,24 +569,18 @@ fn provider_query_build_test_request_body_for_api_format(
 fn provider_query_build_test_request_body_for_api_format_with_search_session(
     payload: &Value,
     model: &str,
-    route_path: &str,
+    _route_path: &str,
     client_api_format: &str,
     search_session_id: Option<&str>,
 ) -> Value {
     let client_api_format = provider_query_normalize_api_format_alias(client_api_format);
-    let override_custom_model = route_path.ends_with("/test-model-failover")
-        || provider_query_extract_mapped_model_name(payload).is_some();
     if client_api_format == "typesafe:systemone" {
         let mut body = provider_query_extract_request_body(payload)
             .unwrap_or_else(|| crate::ai_serving::systemone_test_request(model));
         if let Some(object) = body.as_object_mut() {
-            if override_custom_model {
-                object.insert("model".to_string(), Value::String(model.to_string()));
-            } else {
-                object
-                    .entry("model".to_string())
-                    .or_insert_with(|| Value::String(model.to_string()));
-            }
+            object
+                .entry("model".to_string())
+                .or_insert_with(|| Value::String(model.to_string()));
         }
         return body;
     }
@@ -588,13 +590,9 @@ fn provider_query_build_test_request_body_for_api_format_with_search_session(
             client_api_format.as_str(),
         );
         if let Some(object) = body.as_object_mut() {
-            if override_custom_model {
-                object.insert("model".to_string(), Value::String(model.to_string()));
-            } else {
-                object
-                    .entry("model".to_string())
-                    .or_insert_with(|| Value::String(model.to_string()));
-            }
+            object
+                .entry("model".to_string())
+                .or_insert_with(|| Value::String(model.to_string()));
             if !has_conversation {
                 provider_query_insert_default_test_conversation(
                     object,
@@ -1512,7 +1510,9 @@ async fn provider_query_build_kiro_test_candidates(
         })?;
     let test_mode = provider_query_test_mode(payload);
     let explicit_mapped_model = provider_query_extract_mapped_model_name(payload);
-    let effective_model = if let Some(mapped_model_name) = explicit_mapped_model {
+    let effective_model = if let Some(model) = provider_query_explicit_request_body_model(payload) {
+        model.to_string()
+    } else if let Some(mapped_model_name) = explicit_mapped_model {
         if let Some(effective_model) = provider_query_resolve_explicit_mapped_effective_model(
             state,
             &provider.id,

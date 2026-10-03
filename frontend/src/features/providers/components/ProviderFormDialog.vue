@@ -124,7 +124,7 @@
               </SelectContent>
             </Select>
             <p
-              v-if="!isEditMode && form.provider_type !== 'custom'"
+              v-if="!isEditMode && !['custom', 'jev'].includes(form.provider_type)"
               class="text-xs text-muted-foreground"
             >
               {{ legacyT('反代使用固定端点且不可修改') }}

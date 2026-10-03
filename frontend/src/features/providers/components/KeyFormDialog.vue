@@ -432,6 +432,9 @@ function normalizeFormAuthType(authType: string | null | undefined): ProviderKey
 }
 
 function getAuthTypeOptions(providerType: ProviderType | null): AuthTypeOption[] {
+  if (['clinepass', 'jev'].includes((providerType || '').toLowerCase())) {
+    return [{ value: 'api_key', label: 'API Key' }]
+  }
   if ((providerType || '').toLowerCase() === 'vertex_ai') {
     return [
       { value: 'api_key', label: 'API Key' },

@@ -1267,6 +1267,20 @@ impl ProviderCatalogWriteRepository for InMemoryProviderCatalogReadRepository {
             .index
             .write()
             .expect("provider catalog repository lock");
+        if let Some(expected) = update.expected_credential.as_ref() {
+            let matches = index.keys.get(&update.key_id).is_some_and(|key| {
+                key.encrypted_api_key == expected.encrypted_api_key
+                    && key.auth_type == expected.auth_type
+                    && key.provider_id == expected.provider_id
+                    && index
+                        .providers
+                        .get(&key.provider_id)
+                        .is_some_and(|provider| provider.provider_type == expected.provider_type)
+            });
+            if !matches {
+                return Ok(false);
+            }
+        }
         let Some(key) = index.keys.get_mut(&update.key_id) else {
             return Ok(false);
         };
@@ -2677,6 +2691,7 @@ mod tests {
         assert!(repository
             .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                 key_id: "key-1".to_string(),
+                expected_credential: None,
                 namespace: "codex".to_string(),
                 expected_upstream_metadata_value: Some(json!({"remaining": 5})),
                 upstream_metadata_value: json!({"remaining": 3}),
@@ -2748,6 +2763,7 @@ mod tests {
                 let first = repository
                     .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                         key_id: "key-1".to_string(),
+                        expected_credential: None,
                         namespace: "grok".to_string(),
                         expected_upstream_metadata_value: expected,
                         upstream_metadata_value: Value::Object(next),
@@ -2787,6 +2803,7 @@ mod tests {
                 let retried = repository
                     .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                         key_id: "key-1".to_string(),
+                        expected_credential: None,
                         namespace: "grok".to_string(),
                         expected_upstream_metadata_value: expected,
                         upstream_metadata_value: Value::Object(next),
@@ -2827,6 +2844,7 @@ mod tests {
         );
         let create = ProviderCatalogKeyRuntimeMetadataUpdate {
             key_id: "key-1".to_string(),
+            expected_credential: None,
             namespace: "new_namespace".to_string(),
             expected_upstream_metadata_value: None,
             upstream_metadata_value: json!({"value": 1}),
@@ -2853,6 +2871,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_metadata_cas_rejects_changed_api_key_credential() {
+        let mut key = sample_key("key-1", "provider-1");
+        key.encrypted_api_key = Some("current-key".to_string());
+        let repository = InMemoryProviderCatalogReadRepository::seed(
+            vec![sample_provider("provider-1")],
+            vec![],
+            vec![key],
+        );
+        let mut update = ProviderCatalogKeyRuntimeMetadataUpdate {
+            key_id: "key-1".to_string(),
+            namespace: "clinepass".to_string(),
+            expected_credential: Some(ProviderCatalogKeyOAuthCredentialFence {
+                encrypted_api_key: Some("old-key".to_string()),
+                auth_type: "api_key".to_string(),
+                provider_id: "provider-1".to_string(),
+                provider_type: "custom".to_string(),
+            }),
+            expected_upstream_metadata_value: None,
+            upstream_metadata_value: json!({"remaining":0.9}),
+            status_snapshot_patch: json!({"quota":{"remaining":0.9}}),
+            updated_at_unix_secs: Some(1),
+        };
+        assert!(!repository
+            .update_key_runtime_metadata(&update)
+            .await
+            .unwrap());
+        update
+            .expected_credential
+            .as_mut()
+            .unwrap()
+            .encrypted_api_key = Some("current-key".to_string());
+        assert!(repository
+            .update_key_runtime_metadata(&update)
+            .await
+            .unwrap());
+        let stored = repository
+            .list_keys_by_ids(&["key-1".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(stored[0].encrypted_api_key.as_deref(), Some("current-key"));
+        assert!(stored[0].encrypted_auth_config.is_none());
+        assert_eq!(
+            stored[0].upstream_metadata.as_ref().unwrap()["clinepass"]["remaining"],
+            0.9
+        );
+    }
+
+    #[tokio::test]
     async fn runtime_metadata_namespace_cas_rejects_non_object_metadata_roots() {
         for invalid_root in [json!(null), json!([]), json!("invalid"), json!(1)] {
             let mut key = sample_key("key-1", "provider-1");
@@ -2868,6 +2934,7 @@ mod tests {
             assert!(!repository
                 .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: "key-1".to_string(),
+                    expected_credential: None,
                     namespace: "codex".to_string(),
                     expected_upstream_metadata_value: None,
                     upstream_metadata_value: json!({"remaining":1}),
@@ -2987,6 +3054,7 @@ mod tests {
         repository
             .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                 key_id: key.id.clone(),
+                expected_credential: None,
                 namespace: "codex".to_string(),
                 expected_upstream_metadata_value: Some(json!({"remaining": 5})),
                 upstream_metadata_value: json!({"remaining":3}),

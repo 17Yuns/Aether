@@ -78,6 +78,9 @@ impl std::fmt::Debug for ProviderCatalogKeyAdaptiveStateUpdate {
 pub struct ProviderCatalogKeyRuntimeMetadataUpdate {
     pub key_id: String,
     pub namespace: String,
+    /// Credentials observed before an API-key quota request started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_credential: Option<ProviderCatalogKeyOAuthCredentialFence>,
     /// Value observed for `namespace` immediately before calculating the update.
     ///
     /// `None` means that the namespace was absent.  The repository must compare

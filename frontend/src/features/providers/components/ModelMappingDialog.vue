@@ -224,6 +224,25 @@
         </div>
       </div>
 
+      <div
+        v-if="isClinePass && selectedNames.length"
+        class="space-y-3"
+      >
+        <div
+          v-for="name in selectedNames"
+          :key="name"
+          class="space-y-1.5"
+        >
+          <Label class="font-mono text-xs">{{ name }}</Label>
+          <ClinePassModelChannelFilter
+            :model-value="clinepassRule(name)"
+            :provider-id="clinepassReady ? providerId : undefined"
+            :model-name="name"
+            @update:model-value="clinepassRules[name] = $event"
+          />
+        </div>
+      </div>
+
       <div class="space-y-3 border-t border-border/60 pt-4">
         <div class="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div class="min-w-0 space-y-0.5">
@@ -294,7 +313,7 @@
         取消
       </Button>
       <Button
-        :disabled="submitting || !formData.modelId || selectedNames.length === 0"
+        :disabled="submitting || (isClinePass && !clinepassReady) || !formData.modelId || selectedNames.length === 0"
         @click="handleSubmit"
       >
         <Loader2
@@ -332,6 +351,9 @@ import {
   type UpstreamModel,
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
+import { getProvider, updateProvider } from '@/api/endpoints/providers'
+import type { ClinePassModelFilter } from '@/api/endpoints'
+import ClinePassModelChannelFilter from './ClinePassModelChannelFilter.vue'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
 import {
   ALL_REQUESTS_SCOPE_VALUE,
@@ -362,6 +384,7 @@ export interface AliasGroup {
 const props = defineProps<{
   open: boolean
   providerId: string
+  providerType?: string
   /** @deprecated */
   providerApiFormats?: string[]
   endpoints?: ProviderEndpoint[]
@@ -379,6 +402,31 @@ const emit = defineEmits<{
 const { error: showError, success: showSuccess, warning: showWarning } = useToast()
 const { t } = useI18n()
 const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
+const isClinePass = computed(() => props.providerType?.toLowerCase() === 'clinepass')
+const clinepassReady = ref(false)
+const clinepassRules = ref<Record<string, ClinePassModelFilter>>({})
+let originalClinepassRules: Record<string, string> = {}
+
+function clinepassRule(name: string): ClinePassModelFilter {
+  return clinepassRules.value[name] ?? { only: [], exclude: [], available_channels: [] }
+}
+
+async function loadClinepassRules() {
+  const providerId = props.providerId
+  clinepassReady.value = false
+  clinepassRules.value = {}
+  originalClinepassRules = {}
+  try {
+    const provider = await getProvider(providerId)
+    if (!props.open || providerId !== props.providerId) return
+    clinepassRules.value = JSON.parse(JSON.stringify(provider.clinepass?.models ?? {}))
+    originalClinepassRules = Object.fromEntries(Object.entries(clinepassRules.value)
+      .map(([name, rule]) => [name, JSON.stringify(rule)]))
+    clinepassReady.value = true
+  } catch (error) {
+    showError(parseApiError(error, '加载渠道商配置失败'))
+  }
+}
 
 type EndpointOption = {
   value: string
@@ -713,6 +761,7 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       initForm()
+      if (isClinePass.value) await loadClinepassRules()
       if (props.hasAutoFetchKey) {
         await fetchUpstreamModels()
       }
@@ -790,6 +839,13 @@ function getOperationsKey(operations: string[] | undefined): string {
 async function handleSubmit() {
   if (submitting.value) return
   if (!formData.value.modelId || selectedNames.value.length === 0) return
+  if (isClinePass.value) {
+    if (!clinepassReady.value) return
+    if (selectedNames.value.some(name => !name.startsWith('cline-pass/') || name === 'cline-pass/')) {
+      showError('ClinePass 模型映射必须选择 cline-pass/ 开头的套餐模型')
+      return
+    }
+  }
 
   submitting.value = true
   try {
@@ -870,6 +926,18 @@ async function handleSubmit() {
       ]
     }
 
+    if (isClinePass.value) {
+      const changedRules = Object.fromEntries(selectedNames.value
+        .filter(name => clinepassRules.value[name]
+          && JSON.stringify(clinepassRules.value[name]) !== originalClinepassRules[name])
+        .map(name => [name, clinepassRules.value[name]]))
+      if (Object.keys(changedRules).length) {
+        const latest = await getProvider(props.providerId)
+        await updateProvider(props.providerId, {
+          config: { clinepass: { models: { ...latest.clinepass?.models, ...changedRules } } },
+        })
+      }
+    }
     await updateModel(props.providerId, targetModel.id, {
       provider_model_mappings: newAliases
     })

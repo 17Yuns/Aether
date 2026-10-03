@@ -55,6 +55,22 @@ afterEach(() => {
 })
 
 describe('model test failure details', () => {
+  it.each(['direct', 'global', 'pool'] as const)('preserves a manually edited request model in %s mode', async (mode) => {
+    mocks.testModel.mockResolvedValue({ success: true, model: 'custom-model' })
+    mocks.testModelFailover.mockResolvedValue({ success: true, model: 'custom-model', attempts: [] })
+    await mountModelTest().startTest({ ...params, mode, mappedModelName: 'mapped-model',
+      requestBody: { model: 'custom-model', input: 'Hello' } })
+    const api = mode === 'direct' ? mocks.testModel : mocks.testModelFailover
+    expect(api).toHaveBeenCalledWith(expect.objectContaining({
+      request_body: { model: 'custom-model', input: 'Hello' } }), expect.any(Object))
+  })
+
+  it('applies mapping when the request model has not been edited', async () => {
+    mocks.testModelFailover.mockResolvedValue({ success: true, attempts: [] })
+    await mountModelTest().startTest({ ...params, applyModelMapping: true })
+    const request = mocks.testModelFailover.mock.calls[0]?.[0]
+    expect(request.apply_model_mapping).toBe(true)
+  })
   it.each(['direct', 'global', 'pool'] as const)(
     'forwards the client protocol independently of the upstream endpoint in %s mode',
     async (mode) => {

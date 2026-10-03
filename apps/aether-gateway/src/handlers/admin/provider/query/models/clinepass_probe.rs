@@ -71,6 +71,22 @@ pub(crate) async fn probe_clinepass_channels(
             "ClinePass requires an active Chat endpoint and API key",
         ));
     };
+    let model = if model.starts_with("cline-pass/") {
+        model
+    } else {
+        super::model_test::model_mapping::provider_query_resolve_global_effective_model(
+            state,
+            &provider_id,
+            &model,
+            endpoint,
+        )
+        .await?
+    };
+    if !model.starts_with("cline-pass/") || model == "cline-pass/" {
+        return Ok(build_admin_provider_query_bad_request_response(
+            "请在模型映射中选择 cline-pass/ 开头的 ClinePass 套餐模型",
+        ));
+    }
     let Some(transport) = state
         .read_provider_transport_snapshot(&provider_id, &endpoint.id, &key.id)
         .await?

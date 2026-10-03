@@ -3,11 +3,12 @@ import { createApp, defineComponent, h, nextTick, reactive, type App } from 'vue
 
 import ModelsTab from '../ModelsTab.vue'
 import { createI18n } from '@/i18n'
-import type { Model, ProviderWithEndpointsSummary } from '@/api/endpoints'
+import type { Model, ProviderEndpoint, ProviderWithEndpointsSummary } from '@/api/endpoints'
 
 const modelMocks = vi.hoisted(() => ({
   deleteModel: vi.fn(),
   updateModel: vi.fn(),
+  startTest: vi.fn(),
 }))
 
 const confirmMocks = vi.hoisted(() => ({
@@ -41,14 +42,20 @@ vi.mock('@/composables/useModelTest', () => ({
     testTrace: { value: null },
     requestId: { value: null },
     resetState: vi.fn(),
-    startTest: vi.fn(),
+    startTest: modelMocks.startTest,
     stopPolling: vi.fn(),
   }),
 }))
 vi.mock('../ModelTestDialog.vue', () => ({
   default: defineComponent({
     name: 'ModelTestDialogStub',
-    setup: () => () => null,
+    props: { requestBodyDraft: String },
+    emits: ['start', 'update:request-body-draft'],
+    setup: (props, { emit }) => () => h('div', [
+      h('textarea', { 'data-test-request': true, value: props.requestBodyDraft,
+        onInput: (event: Event) => emit('update:request-body-draft', (event.target as HTMLTextAreaElement).value) }),
+      h('button', { 'data-start-test': true, onClick: () => emit('start') }, 'Start test'),
+    ]),
   }),
 }))
 
@@ -116,6 +123,7 @@ async function settle() {
 function mountTab(options?: {
   models?: Model[]
   provider?: ProviderWithEndpointsSummary
+  endpoints?: ProviderEndpoint[]
 }) {
   const root = document.createElement('div')
   document.body.appendChild(root)
@@ -130,7 +138,7 @@ function mountTab(options?: {
       return () => h(ModelsTab, {
         provider: state.provider,
         models: state.models,
-        endpoints: [],
+        endpoints: options?.endpoints ?? [],
         onRefresh,
         onBatchAssign,
       })
@@ -152,6 +160,7 @@ beforeEach(() => {
   modelMocks.deleteModel.mockReset()
   modelMocks.deleteModel.mockResolvedValue({ message: 'ok' })
   modelMocks.updateModel.mockReset()
+  modelMocks.startTest.mockReset()
   confirmMocks.confirmDanger.mockReset()
   confirmMocks.confirmDanger.mockResolvedValue(true)
   toastMocks.success.mockReset()
@@ -167,6 +176,26 @@ afterEach(() => {
 })
 
 describe('ModelsTab batch delete', () => {
+  it.each([true, false])('shows the upstream model in the editor and sends edits unchanged (mapping: %s)', async (hasMapping) => {
+    const upstream = 'cline-pass/deepseek-v4.1-flash'
+    const { root } = mountTab({ models: [createModel({
+      provider_model_name: hasMapping ? 'deepseek-v4-flash' : upstream,
+      provider_model_mappings: hasMapping ? [{ name: upstream, priority: 1 }] : [],
+    })],
+      provider: { ...createProvider(), provider_type: 'clinepass' },
+      endpoints: [{ id: 'endpoint-chat', api_format: 'openai:chat', base_url: 'https://api.cline.bot/api/v1', is_active: true, active_keys: 1 } as ProviderEndpoint] })
+    root.querySelector<HTMLButtonElement>('[title="测试模型"]')!.click()
+    await settle()
+    const editor = root.querySelector<HTMLTextAreaElement>('[data-test-request]')!
+    expect(JSON.parse(editor.value).model).toBe(upstream)
+    const request = { ...JSON.parse(editor.value), model: 'cline-pass/glm-5.3' }
+    editor.value = JSON.stringify(request)
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    root.querySelector<HTMLButtonElement>('[data-start-test]')!.click()
+    await settle()
+    expect(modelMocks.startTest).toHaveBeenCalledWith(expect.objectContaining({ requestBody: request }))
+  })
   it('keeps delete selected hidden until a model is checked', async () => {
     const { root } = mountTab()
     await settle()

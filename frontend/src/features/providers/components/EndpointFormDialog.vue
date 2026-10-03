@@ -1908,7 +1908,7 @@ const internalOpen = computed(() => props.modelValue)
 
 const isFixedProvider = computed(() => {
   const t = props.provider?.provider_type
-  return !!t && t !== 'custom'
+  return !!t && t !== 'custom' && t !== 'jev'
 })
 
 const isEndpointConfigReadOnly = computed(() => {
@@ -1933,7 +1933,8 @@ const localEndpoints = ref<ProviderEndpoint[]>([])
 // 可用的格式（未添加的）
 const availableFormats = computed(() => {
   const existingFormats = localEndpoints.value.map(e => e.api_format)
-  return apiFormats.value.filter(f => !existingFormats.includes(f.value))
+  return apiFormats.value.filter(f => !existingFormats.includes(f.value)
+    && (props.provider?.provider_type !== 'jev' || f.value === 'typesafe:systemone'))
 })
 
 // 删除确认弹窗描述

@@ -2,6 +2,8 @@
 
 在提供商设置选择 **Jev**，保存后自动创建 **Jev System One** 端点。上游地址为 `https://api.typesafe.ai/v1/systemone`，协议签名为 `typesafe:systemone`。在密钥管理或号池的 **导入 Key** 中直接粘贴 API Key，一行一个，也支持 `名称----Key`；名称可以自动生成。上游请求以 `Authorization: Bearer <上游 API Key>` 认证。
 
+端点可以编辑；已有渠道缺少端点时，可手动添加 **Jev System One**，Base URL 填 `https://api.typesafe.ai/v1`，默认路径为 `/systemone`。需要显式填写自定义路径时也填 `/systemone`，最终请求地址为 `https://api.typesafe.ai/v1/systemone`。Jev 仅开放原生 System One 端点。密钥添加和导入固定使用 API Key，无需另选 Bearer token。
+
 刷新模型调用上游 `GET /v1/models`，读取原生 `models` 数组中的 `name`、`description` 和 `release_date`。模型选择支持 `jev-latest`、`jev-preview`；需要固定版本时可手动填写版本 ID，例如 `jev-1.13.0`，即使该版本不在上游列表中。关联本地全局模型后，客户端使用全局模型名，Aether 只把请求的 `model` 替换为配置的上游模型名。
 
 客户端使用自己的 Aether API Key，并在权限中开放 `typesafe:systemone`、对应模型及 Jev 提供商。原生协议保持独立，聊天协议权限不会自动开放 System One。

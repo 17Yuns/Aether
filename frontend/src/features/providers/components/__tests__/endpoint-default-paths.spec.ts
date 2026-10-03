@@ -19,9 +19,16 @@ const apiFormats = [
   { value: 'jina:embedding', default_path: '/v1/embeddings' },
   { value: 'jina:rerank', default_path: '/v1/rerank' },
   { value: 'claude:messages', default_path: '/v1/messages' },
+  { value: 'typesafe:systemone', default_path: '/v1/systemone' },
 ]
 
 describe('endpoint default paths', () => {
+  it('combines the Jev v1 base URL with the relative System One path', () => {
+    expect(getDefaultEndpointBaseUrl({ apiFormat: 'typesafe:systemone', baseUrl: 'https://api.typesafe.ai' }))
+      .toBe('https://api.typesafe.ai/v1')
+    expect(getDefaultEndpointPath({ apiFormat: 'typesafe:systemone', providerType: 'jev',
+      baseUrl: 'https://api.typesafe.ai/v1', apiFormats })).toBe('/systemone')
+  })
   it('uses Gemini Developer API resource paths for custom Gemini endpoints', () => {
     expect(getDefaultEndpointPath({
       apiFormat: 'gemini:generate_content',

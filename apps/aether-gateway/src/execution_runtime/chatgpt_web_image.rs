@@ -1883,6 +1883,7 @@ async fn apply_chatgpt_web_image_quota_request_delta(
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: latest_key.id.clone(),
+                    expected_credential: None,
                     namespace: "chatgpt_web".to_string(),
                     expected_upstream_metadata_value: expected_namespace_value,
                     upstream_metadata_value: namespace_value,
@@ -2267,6 +2268,7 @@ async fn refresh_chatgpt_web_image_quota_after_success(
     let persisted = state
         .update_provider_catalog_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
             key_id: updated_key.id.clone(),
+            expected_credential: None,
             namespace: "chatgpt_web".to_string(),
             expected_upstream_metadata_value: expected_namespace_value,
             upstream_metadata_value: namespace_value,

@@ -297,7 +297,6 @@ const JEV_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate
         config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
     }],
     runtime_policy: ProviderRuntimePolicy {
-        fixed_provider: true,
         supports_local_openai_chat_transport: false,
         ..STANDARD_RUNTIME_POLICY
     },
@@ -731,12 +730,13 @@ mod tests {
     };
 
     #[test]
-    fn jev_fixed_provider_exposes_only_native_systemone_and_api_key_auth() {
+    fn jev_provider_exposes_editable_native_systemone_and_api_key_auth() {
         let template = fixed_provider_template("Jev").unwrap();
         assert_eq!(template.base_url, "https://api.typesafe.ai/v1");
         assert_eq!(template.endpoints.len(), 1);
         assert_eq!(template.endpoints[0].api_format, "typesafe:systemone");
         assert!(template.runtime_policy.supports_model_fetch);
+        assert!(!template.runtime_policy.fixed_provider);
         assert!(!template.runtime_policy.enable_format_conversion_by_default);
         assert!(!template.runtime_policy.supports_local_openai_chat_transport);
         assert!(provider_type_admin_oauth_template("jev").is_none());

@@ -67,52 +67,30 @@ beforeEach(() => {
 afterEach(() => { app?.unmount(); root?.remove(); document.body.innerHTML = '' })
 
 describe('ClinePass model configuration', () => {
-  it('saves a selected channel for the actual upstream model and preserves other model rules', async () => {
-    mocks.getProvider.mockResolvedValueOnce({ clinepass: { models: { [modelName]: rule } } })
-      .mockResolvedValueOnce({ clinepass: { models: {
-        [modelName]: rule,
-        'cline-pass/glm-5.3': { ...rule, only: ['zai'] },
-      } } })
+  it('edits model settings without duplicating mapping and channel controls', async () => {
     mount(editedModel)
     await settle()
-    button('选择 baseten').click()
-    await nextTick()
+    expect(document.body.textContent).not.toContain('渠道商筛选')
+    expect(document.body.textContent).not.toContain('选择 baseten')
+    expect(mocks.getProvider).not.toHaveBeenCalled()
+    expect(mocks.fetchModels).not.toHaveBeenCalled()
     button('保存').click()
     await settle()
-    expect(mocks.updateProvider).toHaveBeenCalledWith('provider-1', { config: { clinepass: { models: {
-      [modelName]: { ...rule, only: ['baseten'] },
-      'cline-pass/glm-5.3': { ...rule, only: ['zai'] },
-    } } } })
     expect(mocks.updateModel).toHaveBeenCalledWith('provider-1', 'model-1', expect.any(Object))
+    expect(mocks.updateProvider).not.toHaveBeenCalled()
   })
 
-  it('uses the subscription model from the catalog when adding a local global model', async () => {
+  it('adds a local model independently of its upstream mapping', async () => {
     mount(null)
     await settle()
     button('手动添加').click()
     await nextTick()
     await input('#manual-global-model-name', 'deepseek-v4.1-flash')
-    expect(document.body.querySelector('[role="combobox"]')?.textContent).toContain(modelName)
-    button('选择 baseten').click()
-    await nextTick()
     button('添加').click()
     await settle()
     expect(mocks.createModel).toHaveBeenCalledWith('provider-1', expect.objectContaining({
-      global_model_id: 'global-1', provider_model_name: modelName,
+      global_model_id: 'global-1', provider_model_name: 'deepseek-v4.1-flash',
     }))
-    expect(mocks.updateProvider.mock.calls[0]?.[1].config.clinepass.models[modelName].only).toEqual(['baseten'])
-  })
-
-  it('rejects a bare model ID instead of submitting an invalid upstream request', async () => {
-    mount(editedModel)
-    await settle()
-    button('手动填写').click()
-    await nextTick()
-    await input('#provider-model-name', 'deepseek-v4.1-flash')
-    button('保存').click()
-    await settle()
-    expect(mocks.error).toHaveBeenCalledWith('ClinePass 套餐模型必须使用 cline-pass/ 开头的模型 ID')
-    expect(mocks.updateModel).not.toHaveBeenCalled()
     expect(mocks.updateProvider).not.toHaveBeenCalled()
   })
 })

@@ -2404,7 +2404,7 @@ async fn gateway_maps_admin_provider_model_before_model_list_test_request_impl()
             "endpoint_id": "endpoint-minimax-chat",
             "mapped_model_name": "MiniMax-M2.7-balanced",
             "request_body": {
-                "model": "stale-model-from-ui",
+                "model": "MiniMax-M2.7-balanced",
                 "messages": [{
                     "role": "user",
                     "content": "custom prompt"

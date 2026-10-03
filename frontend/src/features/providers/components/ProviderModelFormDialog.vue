@@ -91,7 +91,6 @@
           没有可选择的本地全局模型。可以切换到“手动添加”继续保存。
         </p>
         <div
-          v-if="!isClinePass"
           class="space-y-1.5"
         >
           <Label
@@ -144,66 +143,6 @@
         </div>
       </div>
 
-      <div
-        v-if="isClinePass"
-        class="space-y-1.5"
-      >
-        <Label
-          for="provider-model-name"
-          class="text-xs"
-        >Provider 模型名 *</Label>
-        <Input
-          v-if="clinepassManualModel"
-          id="provider-model-name"
-          v-model="form.provider_model_name"
-          placeholder="如 cline-pass/deepseek-v4.1-flash"
-        />
-        <Select
-          v-else
-          :model-value="form.provider_model_name"
-          :disabled="loadingClinepassModels"
-          @update:model-value="form.provider_model_name = String($event)"
-        >
-          <SelectTrigger><SelectValue :placeholder="loadingClinepassModels ? '加载 ClinePass 模型中…' : '请选择 ClinePass 套餐模型'" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              v-for="model in clinepassModels"
-              :key="model"
-              :value="model"
-            >
-              {{ model }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <div class="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            :disabled="loadingClinepassModels"
-            @click="loadClinepassModels(true)"
-          >
-            刷新模型目录
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            @click="clinepassManualModel = !clinepassManualModel"
-          >
-            {{ clinepassManualModel ? '选择套餐模型' : '手动填写' }}
-          </Button>
-        </div>
-        <p class="text-xs text-muted-foreground">
-          请选择 ClinePass 套餐模型，必须使用 cline-pass/ 前缀，例如 cline-pass/deepseek-v4.1-flash。
-        </p>
-      </div>
-      <ClinePassModelChannelFilter
-        v-if="isClinePass"
-        v-model="clinepassModelFilter"
-        :provider-id="clinepassReady ? providerId : undefined"
-        :model-name="form.provider_model_name"
-      />
 
       <div class="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
         <div class="flex items-start gap-2">
@@ -397,7 +336,7 @@
         取消
       </Button>
       <Button
-        :disabled="submitting || (isClinePass && !clinepassReady) || (!isEditing && !canSubmitCreate)"
+        :disabled="submitting || (!isEditing && !canSubmitCreate)"
         @click="handleSubmit"
       >
         <Loader2
@@ -434,9 +373,6 @@ import {
 import { useToast } from '@/composables/useToast'
 import { parseNumberInput, sortResolutionEntries } from '@/utils/form'
 import { createModel, updateModel, getProviderModels } from '@/api/endpoints/models'
-import { getProvider, updateProvider } from '@/api/endpoints/providers'
-import ClinePassModelChannelFilter from './ClinePassModelChannelFilter.vue'
-import { useUpstreamModelsCache } from '@/features/providers/composables/useUpstreamModelsCache'
 import {
   createGlobalModel,
   getGlobalModel,
@@ -449,8 +385,6 @@ import type {
   Model,
   ProviderTieredPricingConfig,
   TieredPricingConfig,
-  ClinePassConfig,
-  ClinePassModelFilter,
 } from '@/api/endpoints'
 import {
   buildProviderTieredPricingOverride,
@@ -484,44 +418,6 @@ const { error: showError, success: showSuccess } = useToast()
 const tieredPricingEditorRef = ref<InstanceType<typeof TieredPricingEditor> | null>(null)
 
 const isEditing = computed(() => !!props.editingModel)
-const isClinePass = computed(() => props.providerType?.toLowerCase() === 'clinepass')
-const clinepassReady = ref(false)
-const clinepassConfig = ref<ClinePassConfig>({ models: {} })
-const originalClinepassRules = ref<Record<string, string>>({})
-const clinepassModels = ref<string[]>([])
-const loadingClinepassModels = ref(false)
-const clinepassManualModel = ref(false)
-const { fetchModels: fetchClinepassModels } = useUpstreamModelsCache()
-
-async function loadClinepassModels(force = false) {
-  const providerId = props.providerId
-  loadingClinepassModels.value = true
-  try {
-    const result = await fetchClinepassModels(providerId, undefined, force)
-    if (!props.open || props.providerId !== providerId) return
-    if (result.error) throw new Error(result.error)
-    clinepassModels.value = result.models.map(model => model.id).filter(id => id.startsWith('cline-pass/'))
-    if (!clinepassModels.value.length) throw new Error('未获取到 ClinePass 套餐模型，请刷新模型目录或手动填写 cline-pass/ 模型 ID')
-    if (!form.value.provider_model_name.trim()) {
-      const name = selectedGlobalModel.value?.name ?? form.value.manual_global_model_name
-      form.value.provider_model_name = defaultProviderModelName(name)
-    }
-  } catch (error) {
-    if (!props.open || props.providerId !== providerId) return
-    showError(parseApiError(error, '加载 ClinePass 模型目录失败，可手动填写套餐模型 ID'))
-    clinepassManualModel.value = true
-  } finally {
-    loadingClinepassModels.value = false
-  }
-}
-const emptyClinepassRule = (): ClinePassModelFilter => ({ only: [], exclude: [], available_channels: [] })
-const clinepassModelFilter = computed({
-  get: () => clinepassConfig.value.models[form.value.provider_model_name.trim()] ?? emptyClinepassRule(),
-  set: (rule: ClinePassModelFilter) => {
-    const model = form.value.provider_model_name.trim()
-    if (model) clinepassConfig.value = { models: { ...clinepassConfig.value.models, [model]: rule } }
-  },
-})
 
 const selectedGlobalModel = computed(() => {
   return availableGlobalModels.value.find(model => model.id === form.value.global_model_id) || null
@@ -628,25 +524,6 @@ const canSubmitCreate = computed(() => {
 watch(() => props.open, async (newOpen) => {
   if (newOpen) {
     resetForm()
-    clinepassReady.value = false
-    clinepassConfig.value = { models: {} }
-    originalClinepassRules.value = {}
-    clinepassModels.value = []
-    clinepassManualModel.value = false
-    if (isClinePass.value) {
-      const providerId = props.providerId
-      try {
-        const provider = await getProvider(providerId)
-        if (!props.open || props.providerId !== providerId) return
-        clinepassConfig.value = JSON.parse(JSON.stringify(provider.clinepass ?? { models: {} })) as ClinePassConfig
-        originalClinepassRules.value = Object.fromEntries(Object.entries(clinepassConfig.value.models).map(([model, rule]) => [model, JSON.stringify(rule)]))
-        clinepassReady.value = true
-        void loadClinepassModels()
-      } catch (error) {
-        showError(parseApiError(error, '加载渠道商配置失败，请关闭后重试'))
-        return
-      }
-    }
     if (props.editingModel) {
       // 编辑模式：填充表单
       // 使用有效配置（合并全局模型的默认值）供用户查看和编辑
@@ -814,9 +691,7 @@ function handleGlobalModelSelect(value: string) {
 }
 
 function defaultProviderModelName(name: string): string {
-  if (!isClinePass.value) return name
-  const model = name.trim().toLowerCase().split('/').pop()
-  return clinepassModels.value.find(id => id === `cline-pass/${model}`) ?? ''
+  return name
 }
 
 function modelSupportsImageGeneration(model: {
@@ -1051,11 +926,6 @@ function handleClose(value: boolean) {
 // 提交表单
 async function handleSubmit() {
   if (submitting.value) return
-  if (isClinePass.value && !clinepassReady.value) return
-  if (isClinePass.value && (!form.value.provider_model_name.trim().startsWith('cline-pass/') || form.value.provider_model_name.trim() === 'cline-pass/')) {
-    showError('ClinePass 套餐模型必须使用 cline-pass/ 开头的模型 ID')
-    return
-  }
   if (!isEditing.value && !canSubmitCreate.value) {
     showError(manualGlobalModelMode.value ? '请填写模型ID和 Provider 模型名' : '请选择模型并填写 Provider 模型名', '错误')
     return
@@ -1086,17 +956,6 @@ async function handleSubmit() {
       ? form.value.config
       : undefined
 
-    if (isClinePass.value) {
-      const model = form.value.provider_model_name.trim()
-      const rule = clinepassConfig.value.models[model]
-      if (rule && JSON.stringify(rule) !== originalClinepassRules.value[model]) {
-        const latest = await getProvider(props.providerId)
-        await updateProvider(props.providerId, { config: { clinepass: {
-          models: { ...latest.clinepass?.models, [model]: rule },
-        } } })
-        originalClinepassRules.value[model] = JSON.stringify(rule)
-      }
-    }
 
     if (isEditing.value && props.editingModel) {
       // 编辑模式
@@ -1116,9 +975,6 @@ async function handleSubmit() {
           supportsImageGeneration,
           isActive: form.value.is_active
         }),
-        ...(isClinePass.value && form.value.provider_model_name.trim() !== props.editingModel.provider_model_name
-          ? { provider_model_name: form.value.provider_model_name.trim() }
-          : {}),
       })
       showSuccess('模型配置已更新')
     } else {

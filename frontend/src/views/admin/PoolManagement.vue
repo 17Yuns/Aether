@@ -957,6 +957,7 @@
       :provider-name="selectedProviderData?.name || selectedProviderOverview?.provider_name"
       :available-api-formats="selectedProviderData?.api_formats || []"
       allow-bare-keys
+      fixed-api-key-auth
       @close="showImportDialog = false"
       @saved="handleAccountDialogSaved"
     />

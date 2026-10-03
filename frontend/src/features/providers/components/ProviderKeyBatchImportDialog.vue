@@ -121,6 +121,7 @@
 
         <div class="border-t border-border/60 bg-muted/10 p-3 sm:p-4">
           <ProviderKeyImportSettingsFields
+            :fixed-api-key-auth="fixedApiKeyAuth"
             :auth-type="authType"
             :api-formats="selectedApiFormats"
             :settings="settings"
@@ -245,6 +246,7 @@
 
               <ProviderKeyImportSettingsFields
                 v-if="entry.item.customized"
+                :fixed-api-key-auth="fixedApiKeyAuth"
                 :auth-type="entry.item.authType"
                 :api-formats="entry.item.apiFormats"
                 :settings="entry.item.settings"
@@ -385,6 +387,7 @@ const props = defineProps<{
   providerName?: string
   availableApiFormats: string[]
   allowBareKeys?: boolean
+  fixedApiKeyAuth?: boolean
 }>()
 
 const emit = defineEmits<{

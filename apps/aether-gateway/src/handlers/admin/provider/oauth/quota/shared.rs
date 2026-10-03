@@ -934,6 +934,7 @@ pub(crate) async fn persist_codex_account_reset_fence(
                 .update_provider_catalog_key_runtime_metadata(
                     &ProviderCatalogKeyRuntimeMetadataUpdate {
                         key_id: key_id.to_string(),
+                        expected_credential: None,
                         namespace: "codex".to_string(),
                         expected_upstream_metadata_value: expected_codex,
                         upstream_metadata_value: next_codex,
@@ -1168,6 +1169,7 @@ pub(crate) async fn persist_codex_provider_quota_refresh_state(
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: key_id.to_string(),
+                    expected_credential: None,
                     namespace: "codex".to_string(),
                     expected_upstream_metadata_value: expected_codex,
                     upstream_metadata_value: outcome.metadata,
@@ -1534,6 +1536,7 @@ where
             .update_provider_catalog_key_runtime_metadata(
                 &ProviderCatalogKeyRuntimeMetadataUpdate {
                     key_id: key_id.to_string(),
+                    expected_credential: None,
                     namespace: namespace.clone(),
                     expected_upstream_metadata_value: expected.clone(),
                     upstream_metadata_value: value.clone(),
@@ -3203,6 +3206,7 @@ mod tests {
                 assert!(concurrent_repository
                     .update_key_runtime_metadata(&ProviderCatalogKeyRuntimeMetadataUpdate {
                         key_id: "key-codex-cas".to_string(),
+                        expected_credential: None,
                         namespace: "codex".to_string(),
                         expected_upstream_metadata_value: Some(json!({"remaining":5})),
                         upstream_metadata_value: json!({"remaining":4}),
