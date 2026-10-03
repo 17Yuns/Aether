@@ -3223,7 +3223,14 @@ async fn gateway_handles_admin_provider_query_test_model_failover_locally_with_t
             assert_eq!(plan.provider_id, "provider-openai");
             assert_eq!(plan.endpoint_id, "endpoint-openai-chat");
             assert_eq!(plan.provider_api_format, "openai:chat");
-            assert_eq!(plan.model_name.as_deref(), Some("gpt-4.1"));
+            assert_eq!(plan.model_name.as_deref(), Some("gpt-4.1-mini"));
+            assert_eq!(
+                plan.body
+                    .json_body
+                    .as_ref()
+                    .and_then(|body| body.get("model")),
+                Some(&json!("gpt-4.1-mini"))
+            );
             assert_eq!(
                 plan.headers.get("x-test-header").map(String::as_str),
                 Some("from-admin")
@@ -3340,7 +3347,7 @@ async fn gateway_handles_admin_provider_query_test_model_failover_locally_with_t
                 "x-test-header": "from-admin"
             },
             "request_body": {
-                "model": "ignored-model",
+                "model": "gpt-4.1-mini",
                 "messages": [{
                     "role": "user",
                     "content": "custom prompt"
@@ -3373,7 +3380,8 @@ async fn gateway_handles_admin_provider_query_test_model_failover_locally_with_t
     assert_eq!(attempts[0]["status_code"], json!(429));
     assert_eq!(attempts[1]["status"], json!("success"));
     assert_eq!(attempts[1]["key_id"], json!("key-openai-second"));
-    assert_eq!(attempts[1]["request_body"]["model"], json!("gpt-4.1"));
+    assert_eq!(attempts[0]["request_body"]["model"], json!("gpt-4.1-mini"));
+    assert_eq!(attempts[1]["request_body"]["model"], json!("gpt-4.1-mini"));
     assert_eq!(payload["data"]["stream"], json!(false));
     assert_eq!(
         payload["data"]["response"]["choices"][0]["message"]["content"],

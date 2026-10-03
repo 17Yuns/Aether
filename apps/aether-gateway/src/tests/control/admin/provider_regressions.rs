@@ -155,7 +155,10 @@ fn gateway_provider_regressions_clinepass_api_key_quota_without_oauth() {
             assert!(keys[0].encrypted_auth_config.is_none());
             let windows = &keys[0].status_snapshot.as_ref().unwrap()["quota"]["windows"];
             assert_eq!(windows[0]["remaining_ratio"], 0.9);
-            assert_eq!(windows[0]["cap_usd"], 10.0);
+            assert_eq!(
+                keys[0].upstream_metadata.as_ref().unwrap()["clinepass"]["windows"][0]["cap_usd"],
+                10.0
+            );
             assert_eq!(windows[1]["remaining_ratio"], 0.8);
             assert_eq!(windows[2]["remaining_ratio"], 0.65);
             let mut urls = seen.lock().unwrap().clone();
