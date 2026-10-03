@@ -95,7 +95,7 @@ pub(crate) async fn probe_clinepass_channels(
             "ClinePass transport is unavailable",
         ));
     };
-    let first = request(state, &transport, json!({"model":model,"messages":[{"role":"user","content":"hi"}],"max_tokens":256,"stream":false})).await?;
+    let first = request(state, &transport, json!({"model":model,"messages":[{"role":"user","content":"Reply with the word OK"}],"max_tokens":256,"stream":false})).await?;
     if first
         .get("choices")
         .and_then(Value::as_array)
@@ -174,7 +174,15 @@ async fn request(
     let result = state
         .execute_execution_runtime_sync_plan(Some(&plan.request_id), &plan)
         .await?;
-    Ok(super::model_test::provider_query_execution_json_body(&result).unwrap_or(Value::Null))
+    let body =
+        super::model_test::provider_query_execution_json_body(&result).unwrap_or(Value::Null);
+    Ok(
+        crate::ai_serving::api::normalize_provider_private_response_value(
+            body,
+            &json!({"provider_type":"clinepass"}),
+        )
+        .unwrap_or(Value::Null),
+    )
 }
 
 fn routing_metadata(value: &Value) -> Option<&Value> {

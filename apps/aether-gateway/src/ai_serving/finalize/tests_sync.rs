@@ -38,6 +38,77 @@ fn test_decision() -> GatewayControlDecision {
     }
 }
 
+#[test]
+fn clinepass_wrapped_sync_finalize_handles_chat_and_protocol_conversion() {
+    let completion = json!({
+        "id":"chat-cline","object":"chat.completion","model":"baseten/deepseek-v4.1-flash",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"Hello ClinePass"},"finish_reason":"stop"}],
+        "usage":{"prompt_tokens":39,"completion_tokens":73,"total_tokens":112}
+    });
+    let body = json!({"success":true,"data":completion});
+    for (client_format, report_kind) in [
+        ("openai:chat", "openai_chat_sync_finalize"),
+        ("openai:responses", "openai_responses_sync_finalize"),
+        ("claude:messages", "claude_chat_sync_finalize"),
+    ] {
+        for captured_bytes in [false, true] {
+            let payload = GatewaySyncReportRequest {
+                trace_id: "clinepass-wrapped-sync".to_string(),
+                report_kind: report_kind.to_string(),
+                report_context: Some(json!({
+                    "provider_type":"clinepass","provider_api_format":"openai:chat","client_api_format":client_format,
+                    "model":"deepseek-v4.1-flash","needs_conversion":client_format != "openai:chat","has_envelope":false
+                })),
+                status_code: 200,
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/json".to_string(),
+                )]),
+                body_json: (!captured_bytes).then(|| body.clone()),
+                client_body_json: None,
+                body_base64: captured_bytes.then(|| {
+                    base64::engine::general_purpose::STANDARD
+                        .encode(serde_json::to_vec(&body).unwrap())
+                }),
+                telemetry: None,
+            };
+            let outcome = maybe_build_local_core_sync_finalize_response(
+                &payload.trace_id,
+                &test_decision(),
+                &payload,
+            )
+            .unwrap()
+            .expect("ClinePass completion should finalize");
+            let report = outcome.background_report.unwrap();
+            let client = report
+                .client_body_json
+                .as_ref()
+                .or(report.body_json.as_ref())
+                .unwrap();
+            assert!(client.get("data").is_none(), "{client}");
+            match client_format {
+                "openai:chat" => {
+                    assert_eq!(
+                        client["choices"][0]["message"]["content"],
+                        "Hello ClinePass"
+                    );
+                    assert_eq!(client["usage"]["total_tokens"], 112);
+                }
+                "openai:responses" => {
+                    assert_eq!(client["output"][0]["content"][0]["text"], "Hello ClinePass")
+                }
+                _ => assert_eq!(client["content"][0]["text"], "Hello ClinePass"),
+            }
+            if client_format != "openai:chat" {
+                assert_eq!(
+                    report.body_json.as_ref().unwrap()["usage"]["total_tokens"],
+                    112
+                );
+            }
+        }
+    }
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for &byte in data {

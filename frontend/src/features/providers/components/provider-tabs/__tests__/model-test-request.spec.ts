@@ -89,6 +89,22 @@ describe('buildDefaultModelTestRequestBody', () => {
     expect(body.input).toBeUndefined()
   })
 
+  it.each(['clinepass', ' ClinePass '])('omits the small Chat token budget for %s', (providerType) => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('cline-pass/deepseek-v4.1-flash', 'openai:chat', null, providerType))
+
+    expect(body.model).toBe('cline-pass/deepseek-v4.1-flash')
+    expect(body.messages).toEqual([{ role: 'user', content: 'Hello! This is a test message.' }])
+    expect(body.stream).toBe(false)
+    expect(body.max_tokens).toBeUndefined()
+  })
+
+  it('gives converted Claude tests enough room for ClinePass reasoning', () => {
+    const body = JSON.parse(buildDefaultModelTestRequestBody('cline-pass/deepseek-v4.1-flash', 'claude:messages', null, 'clinepass'))
+
+    expect(body.max_tokens).toBe(8192)
+    expect(body.stream).toBe(false)
+  })
+
   it('uses a native minimal Responses request without an output token limit', () => {
     const body = JSON.parse(buildDefaultModelTestRequestBody('test-model', 'openai:responses'))
 

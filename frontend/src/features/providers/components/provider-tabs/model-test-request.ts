@@ -165,6 +165,7 @@ export function buildDefaultModelTestRequestBody(
   providerType?: string | null,
 ): string {
   const normalizedApiFormat = normalizeApiFormatAlias(apiFormat ?? '')
+  const isClinePass = providerType?.trim().toLowerCase() === 'clinepass'
 
   if (normalizedApiFormat === 'typesafe:systemone') {
     return JSON.stringify({
@@ -272,7 +273,9 @@ export function buildDefaultModelTestRequestBody(
         content: DEFAULT_MODEL_TEST_MESSAGE,
       },
     ],
-    max_tokens: normalizedApiFormat === 'claude:messages' ? 16 : 30,
+    ...(isClinePass && normalizedApiFormat !== 'claude:messages'
+      ? {}
+      : { max_tokens: isClinePass ? 8192 : normalizedApiFormat === 'claude:messages' ? 16 : 30 }),
     stream: false,
   }, null, 2)
 }

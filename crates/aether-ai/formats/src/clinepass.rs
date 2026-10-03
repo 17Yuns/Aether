@@ -1,5 +1,27 @@
 use serde_json::Value;
 
+pub fn clinepass_response_body(value: &Value) -> &Value {
+    value
+        .get("data")
+        .filter(|data| {
+            data.get("choices")
+                .and_then(Value::as_array)
+                .is_some_and(|choices| !choices.is_empty())
+        })
+        .unwrap_or(value)
+}
+
+pub fn unwrap_clinepass_response(mut value: Value) -> Value {
+    if let Some(data) = value.get_mut("data").filter(|data| {
+        data.get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| !choices.is_empty())
+    }) {
+        return data.take();
+    }
+    value
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ClinePassResponseFacts {
     pub channel: Option<String>,
@@ -23,6 +45,7 @@ impl ClinePassResponseFacts {
 }
 
 pub fn parse_clinepass_response(value: &Value) -> ClinePassResponseFacts {
+    let value = clinepass_response_body(value);
     if let Some(chunks) = value.get("chunks").and_then(Value::as_array) {
         let mut facts = ClinePassResponseFacts::default();
         for chunk in chunks {
@@ -131,6 +154,52 @@ fn provider_key(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn clinepass_unwraps_completions_but_preserves_errors_and_other_payloads() {
+        let completion = json!({"choices":[{"message":{"role":"assistant","content":"Hi"}}],"usage":{"prompt_tokens":10}});
+        assert_eq!(
+            unwrap_clinepass_response(json!({"success":true,"data":completion})),
+            completion
+        );
+        assert_eq!(unwrap_clinepass_response(completion.clone()), completion);
+        for body in [
+            json!({"success":false,"error":"empty response content"}),
+            json!({"data":{"limits":[]},"success":true}),
+            json!({"data":{"choices":[]},"success":false,"error":"no choices"}),
+        ] {
+            assert_eq!(unwrap_clinepass_response(body.clone()), body);
+        }
+    }
+
+    #[test]
+    fn clinepass_wrapped_sync_response_keeps_cache_and_channel_when_bridged() {
+        let body = json!({"success":true,"data":{
+            "id":"chat-cline","object":"chat.completion","model":"baseten/deepseek-v4.1-flash",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"Hi","provider_metadata":{
+                "gateway":{"routing":{"finalProvider":"baseten"}},
+                "baseten":{"promptCacheHitTokens":70,"promptCacheMissTokens":30}
+            }},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":100,"completion_tokens":2,"total_tokens":102}
+        }});
+        let facts = parse_clinepass_response(&body);
+        assert_eq!(facts.channel.as_deref(), Some("baseten"));
+        assert_eq!(facts.cache_read_tokens, Some(70));
+        let context = json!({"provider_type":"clinepass","provider_api_format":"openai:chat","client_api_format":"openai:responses","model":"deepseek-v4.1-flash"});
+        let bridge =
+            crate::formats::shared::sync_to_stream::maybe_bridge_standard_sync_json_to_stream(
+                &body,
+                "openai:chat",
+                "openai:responses",
+                Some(&context),
+            )
+            .unwrap()
+            .unwrap();
+        let summary = bridge.terminal_summary.unwrap();
+        assert_eq!(summary.provider_channel.as_deref(), Some("baseten"));
+        assert_eq!(summary.standardized_usage.unwrap().cache_read_tokens, 70);
+        assert!(String::from_utf8(bridge.sse_body).unwrap().contains("Hi"));
+    }
 
     #[test]
     fn clinepass_metadata_survives_sync_conversion_and_sync_to_stream_auditing() {

@@ -190,9 +190,15 @@ fn gateway_provider_regressions_clinepass_mapped_test_manual_model_and_probe() {
                 let request = plan.body.json_body.as_ref().unwrap();
                 let model = request["model"].as_str().unwrap();
                 capture.lock().unwrap().push(model.to_string());
+                let completion = json!({"id":"chatcmpl-cline","object":"chat.completion","model":model,"provider":"baseten",
+                    "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
+                let body = if model.ends_with("/empty") {
+                    json!({"success":false,"error":"empty response content"})
+                } else {
+                    json!({"success":true,"data":completion})
+                };
                 Json(ExecutionResult {request_id:plan.request_id,candidate_id:plan.candidate_id,status_code:200,headers:BTreeMap::new(),response_observation:None,
-                    body:Some(ResponseBody{json_body:Some(json!({"id":"chatcmpl-cline","object":"chat.completion","model":model,"provider":"baseten",
-                        "choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}})),body_bytes_b64:None}),telemetry:None,error:None})
+                    body:Some(ResponseBody{json_body:Some(body),body_bytes_b64:None}),telemetry:None,error:None})
             }
         }));
             let (runtime_url, runtime_handle) = start_server(runtime).await;
@@ -244,7 +250,7 @@ fn gateway_provider_regressions_clinepass_mapped_test_manual_model_and_probe() {
                 let response = admin_post(&format!("{url}/api/admin/provider-query/test-model-failover"))
                 .json(&json!({"provider_id":"clinepass","model_name":"deepseek-v4.1-flash","mode":"global","apply_model_mapping":true,
                     "endpoint_id":"cline-endpoint","api_format":"openai:chat",
-                    "failover_models":["deepseek-v4.1-flash"],"request_body":{"model":request_model,"messages":[{"role":"user","content":"Hi"}]}}))
+                    "failover_models":["deepseek-v4.1-flash"],"request_body":{"model":request_model,"messages":[{"role":"user","content":"Hi"}],"max_tokens":30}}))
                 .send().await.unwrap();
                 let status = response.status();
                 let body: Value = response.json().await.unwrap();
@@ -257,7 +263,32 @@ fn gateway_provider_regressions_clinepass_mapped_test_manual_model_and_probe() {
                 };
                 assert_eq!(body["attempts"][0]["request_body"]["model"], expected);
                 assert_eq!(body["attempts"][0]["effective_model"], expected);
+                assert_eq!(body["attempts"][0]["request_body"]["max_tokens"], 30);
+                assert_eq!(
+                    body["attempts"][0]["response_body"]["choices"][0]["message"]["content"],
+                    "Hi"
+                );
             }
+            let response = admin_post(&format!("{url}/api/admin/provider-query/test-model-failover"))
+                .json(&json!({"provider_id":"clinepass","model_name":"deepseek-v4.1-flash","mode":"global",
+                    "endpoint_id":"cline-endpoint","api_format":"openai:chat","failover_models":["deepseek-v4.1-flash"]}))
+                .send().await.unwrap();
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["success"], true, "{body}");
+            assert!(body["attempts"][0]["request_body"]
+                .get("max_tokens")
+                .is_none());
+            let response = admin_post(&format!("{url}/api/admin/provider-query/test-model-failover"))
+                .json(&json!({"provider_id":"clinepass","model_name":"deepseek-v4.1-flash","mode":"global",
+                    "endpoint_id":"cline-endpoint","api_format":"openai:chat","failover_models":["deepseek-v4.1-flash"],
+                    "request_body":{"model":"cline-pass/empty","messages":[{"role":"user","content":"Hi"}]}}))
+                .send().await.unwrap();
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["success"], false, "{body}");
+            assert_eq!(
+                body["attempts"][0]["error_message"],
+                "empty response content"
+            );
             let response = admin_post(&format!("{url}/api/admin/provider-query/test-model"))
             .json(&json!({"provider_id":"clinepass","model_name":"deepseek-v4.1-flash","clinepass_probe":true}))
             .send().await.unwrap();
@@ -268,6 +299,8 @@ fn gateway_provider_regressions_clinepass_mapped_test_manual_model_and_probe() {
                 vec![
                     "cline-pass/deepseek-v4.1-flash",
                     "cline-pass/glm-5.3",
+                    "cline-pass/deepseek-v4.1-flash",
+                    "cline-pass/empty",
                     "cline-pass/deepseek-v4.1-flash",
                     "cline-pass/deepseek-v4.1-flash"
                 ]

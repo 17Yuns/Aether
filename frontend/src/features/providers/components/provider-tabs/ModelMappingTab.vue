@@ -924,6 +924,7 @@ function resetMappingTestRequestBody() {
     testingModelName.value,
     selectedTestEndpoint.value?.api_format,
     testingSourceModel.value,
+    props.provider.provider_type,
   )
   testRequestBodyDraft.value = testRequestBodyResetValue.value
 }
@@ -935,6 +936,7 @@ function syncMappingTestRequestBody() {
     testingModelName.value,
     selectedTestEndpoint.value?.api_format,
     testingSourceModel.value,
+    props.provider.provider_type,
   )
   const next = syncModelTestRequestBodyDraft(
     testRequestBodyDraft.value,

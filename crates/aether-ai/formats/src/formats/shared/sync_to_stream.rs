@@ -46,6 +46,15 @@ pub fn maybe_bridge_standard_sync_json_to_stream(
     client_api_format: &str,
     report_context: Option<&Value>,
 ) -> Result<Option<SyncToStreamBridgeOutcome>, AiSurfaceFinalizeError> {
+    let provider_body_json = if report_context
+        .and_then(|context| context.get("provider_type"))
+        .and_then(Value::as_str)
+        .is_some_and(|provider| provider.eq_ignore_ascii_case("clinepass"))
+    {
+        crate::clinepass::clinepass_response_body(provider_body_json)
+    } else {
+        provider_body_json
+    };
     let provider_api_format = normalize_api_format(provider_api_format);
     let client_api_format = normalize_api_format(client_api_format);
     if let Some(outcome) = maybe_bridge_aether_sse_response_capture_to_stream(

@@ -1762,9 +1762,11 @@ fn provider_query_extract_error_message(
         .and_then(|value| {
             value
                 .get("error")
-                .and_then(Value::as_object)
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
+                .and_then(|error| {
+                    error
+                        .as_str()
+                        .or_else(|| error.get("message").and_then(Value::as_str))
+                })
                 .or_else(|| value.get("message").and_then(Value::as_str))
         })
         .map(str::trim)
@@ -3037,7 +3039,7 @@ async fn provider_query_execute_standard_test_candidate(
             payload.get("request_body"),
         )
     };
-    let original_request_body =
+    let mut original_request_body =
         provider_query_build_test_request_body_for_api_format_with_search_session(
             payload,
             &candidate.effective_model,
@@ -3045,6 +3047,17 @@ async fn provider_query_execute_standard_test_candidate(
             client_api_format,
             Some(trace_id),
         );
+    if provider.provider_type.eq_ignore_ascii_case("clinepass")
+        && !payload.get("request_body").is_some_and(Value::is_object)
+    {
+        if let Some(body) = original_request_body.as_object_mut() {
+            if client_api_format == "openai:chat" {
+                body.remove("max_tokens");
+            } else if client_api_format == "claude:messages" {
+                body.insert("max_tokens".to_string(), json!(8192));
+            }
+        }
+    }
     if crate::provider_transport::is_windsurf_provider_transport(&transport)
         && provider_query_normalize_api_format_alias(candidate.endpoint.api_format.as_str())
             == "openai:chat"
@@ -3446,7 +3459,12 @@ async fn provider_query_execute_standard_test_candidate(
             }
         };
     }
-    let private_report_context =
+    let private_report_context = if provider.provider_type.eq_ignore_ascii_case("clinepass") {
+        Some(json!({
+            "provider_type": "clinepass",
+            "provider_api_format": provider_api_format,
+        }))
+    } else {
         (crate::provider_transport::is_gemini_cli_provider_transport(&transport)
             && normalized_provider_api_format == "gemini:generate_content")
             .then(|| {
@@ -3455,7 +3473,8 @@ async fn provider_query_execute_standard_test_candidate(
                     "envelope_name": crate::provider_transport::GEMINI_CLI_V1INTERNAL_ENVELOPE_NAME,
                     "provider_api_format": provider_api_format,
                 })
-            });
+            })
+    };
 
     let uses_vertex_query_auth =
         crate::provider_transport::uses_vertex_api_key_query_auth(&transport, provider_api_format);
@@ -3717,7 +3736,16 @@ async fn provider_query_execute_standard_test_candidate(
         provider_query_execution_json_body(&result)
     };
     let missing_success_body = result.status_code < 400 && response_body.is_none();
-    let did_fail = result.status_code >= 400 || missing_success_body;
+    let clinepass_error_body = provider.provider_type.eq_ignore_ascii_case("clinepass")
+        && response_body.as_ref().is_some_and(|body| {
+            body.get("success").and_then(Value::as_bool) == Some(false)
+                || (body.get("error").is_some_and(|error| !error.is_null())
+                    && !body
+                        .get("choices")
+                        .and_then(Value::as_array)
+                        .is_some_and(|choices| !choices.is_empty()))
+        });
+    let did_fail = result.status_code >= 400 || missing_success_body || clinepass_error_body;
     let error_message = if did_fail {
         provider_query_extract_error_message(&result).or_else(|| {
             missing_success_body.then(|| {

@@ -16,10 +16,15 @@ pub(crate) fn maybe_normalize_provider_private_sync_report_payload(
     let Some(report_context) = payload.report_context.as_ref() else {
         return Ok(Some(payload.clone()));
     };
+    let is_clinepass = report_context
+        .get("provider_type")
+        .and_then(Value::as_str)
+        .is_some_and(|provider| provider.eq_ignore_ascii_case("clinepass"));
     if !report_context
         .get("has_envelope")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+        && !is_clinepass
     {
         return Ok(Some(payload.clone()));
     }
@@ -46,6 +51,14 @@ pub(crate) fn maybe_normalize_provider_private_sync_report_payload(
     if let Some(body_base64) = payload.body_base64.as_deref() {
         let body_bytes =
             decode_internal_report_body_base64(body_base64).map_err(GatewayError::Internal)?;
+        if is_clinepass {
+            if let Ok(body_json) = serde_json::from_slice::<Value>(&body_bytes) {
+                normalized.body_json =
+                    normalize_provider_private_response_value(body_json, report_context);
+                normalized.body_base64 = None;
+                return Ok(Some(normalized));
+            }
+        }
         let Some(normalized_bytes) =
             normalize_provider_private_stream_bytes(report_context, &body_bytes)?
         else {

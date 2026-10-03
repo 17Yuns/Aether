@@ -66,6 +66,15 @@ pub fn normalize_provider_private_response_value(
     data: Value,
     report_context: &Value,
 ) -> Option<Value> {
+    let data = if report_context
+        .get("provider_type")
+        .and_then(Value::as_str)
+        .is_some_and(|provider| provider.eq_ignore_ascii_case("clinepass"))
+    {
+        crate::clinepass::unwrap_clinepass_response(data)
+    } else {
+        data
+    };
     if !report_context
         .get("has_envelope")
         .and_then(Value::as_bool)
@@ -957,6 +966,26 @@ mod tests {
         normalize_provider_private_report_context, normalize_provider_private_response_value,
         stream_body_contains_error_event, transform_provider_private_stream_line,
     };
+
+    #[test]
+    fn clinepass_sync_wrapper_is_only_unwrapped_for_clinepass() {
+        let completion = json!({"choices":[{"message":{"role":"assistant","content":"Hi"}}]});
+        let body = json!({"success":true,"data":completion});
+        assert_eq!(
+            normalize_provider_private_response_value(
+                body.clone(),
+                &json!({"provider_type":"clinepass"})
+            ),
+            Some(completion),
+        );
+        assert_eq!(
+            normalize_provider_private_response_value(
+                body.clone(),
+                &json!({"provider_type":"openai"})
+            ),
+            Some(body)
+        );
+    }
 
     #[test]
     fn normalizes_supported_private_report_context() {
